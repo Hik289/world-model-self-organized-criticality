@@ -1,0 +1,11 @@
+openai>=1.0
+azure-identity>=1.15
+networkx>=3.0
+numpy>=1.24
+pandas>=2.0
+powerlaw>=1.4
+scipy>=1.11
+statsmodels>=0.14
+tqdm>=4.65
+# For ALFWorld experiments only:
+# alfworld>=0.3

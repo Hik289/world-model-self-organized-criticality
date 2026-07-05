@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "worldmodelsoc"
+version = "0.1.0"
+description = "Experiments for heavy-tailed world-model memory and self-organized criticality."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+  {name = "Anonymous Authors"}
+]
+dependencies = [
+  "openai>=1.0",
+  "azure-identity>=1.15",
+  "networkx>=3.0",
+  "numpy>=1.24",
+  "pandas>=2.0",
+  "powerlaw>=1.4",
+  "scipy>=1.11",
+  "statsmodels>=0.14",
+  "tqdm>=4.65",
+]
+
+[project.optional-dependencies]
+alfworld = ["alfworld>=0.3"]
+dev = ["pytest>=7.0", "ruff>=0.5"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
