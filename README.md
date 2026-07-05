@@ -19,19 +19,27 @@ The repository studies whether API-agent world models exhibit self-organized cri
 
 ## Figures
 
-![Log-normal to TPL intuition](assets/figures/intuition_lognormal_to_tpl.png)
+<p align="center">
+  <img src="assets/figures/intuition_lognormal_to_tpl.png" alt="Log-normal to TPL intuition" width="72%">
+</p>
 
 **Figure 1.** Intuition for the empirical transition from random-walk log-normal memory access to semantically driven truncated power-law behavior.
 
-![LLM policy pipeline](assets/figures/pipeline_llm_policy.png)
+<p align="center">
+  <img src="assets/figures/pipeline_llm_policy.png" alt="LLM policy pipeline" width="72%">
+</p>
 
 **Figure 2.** LLM-policy pipeline: state payloads, retrieved memory hints, and recent trajectory context are passed to the policy model, which chooses the next graph action.
 
-![Retriever ladder](assets/figures/pipeline_retriever_ladder.png)
+<p align="center">
+  <img src="assets/figures/pipeline_retriever_ladder.png" alt="Retriever ladder" width="72%">
+</p>
 
 **Figure 3.** Retriever ladder used for controlled memory comparisons, from simple history/window baselines to graph-structured retrieval.
 
-![CTWM pipeline](assets/figures/pipeline_ctwm.png)
+<p align="center">
+  <img src="assets/figures/pipeline_ctwm.png" alt="CTWM pipeline" width="72%">
+</p>
 
 **Figure 4.** Core-Tail World Model (CTWM): high-score core entries are retained for stable reuse, while tau-weighted tail sampling preserves rare but important transitions.
 
