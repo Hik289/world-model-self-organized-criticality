@@ -5,7 +5,7 @@ Cleanroom setup (only policy differs from the scale-free random-walk setting):
 - graph: scale_free |V|=100 seed=42
 - memory: v2 StateAwareReservoirMemory (sort-by-freq + top_k=3, M=200)
 - N: 由 sanity 决定, target ≥5000
-- policy: gpt-5.4-mini via Azure endpoint (key 从 .secrets/azure.key 载入)
+- policy: OpenAI-compatible chat endpoint (key from env or .secrets/llm.key)
 
 Prompt structure (简单, 保守 tokens):
   system: 你是一个 walker, 给你当前 state 信息和 top-3 memory hints, 选一个 action.
@@ -54,31 +54,20 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from worldmodelsoc.memory.reservoir import StateAwareReservoirMemory  # noqa: E402
 from worldmodelsoc.env.synthetic_graph_world import build_graph, build_state_payloads  # noqa: E402
+from worldmodelsoc.llm_config import LLM_API_BASE_URL, LLM_MODEL, make_openai_client  # noqa: E402
 
 
 # ==============================================================================
-# LLM client (走 .secrets/azure.key)
+# LLM client
 # ==============================================================================
 
-AZURE_ENDPOINT = os.environ.get("AZURE_OPENAI_ENDPOINT", "YOUR_AZURE_OPENAI_ENDPOINT")
-AZURE_DEPLOYMENT = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini")
-
-# gpt-5.4-mini pricing (以官方为准; 这里用保守估计)
+# Default pricing estimate; update for the model/provider you run.
 PRICE_PROMPT_PER_1M = 0.15   # USD per 1M prompt tokens
 PRICE_COMPL_PER_1M = 0.60    # USD per 1M completion tokens
 
 
-def _load_azure_key() -> str:
-    """从 .secrets/azure.key 载入 key. 与 anchor_pipeline modules.py 相同的路径策略."""
-    path = os.environ.get("WORLDMODELSOC_AZURE_KEY_PATH")
-    if path is None:
-        path = ROOT / ".secrets" / "azure.key"
-    with open(path, "r") as f:
-        return f.read().strip()
-
-
 def make_client() -> OpenAI:
-    return OpenAI(base_url=AZURE_ENDPOINT, api_key=_load_azure_key())
+    return make_openai_client()
 
 
 # ==============================================================================
@@ -182,7 +171,7 @@ def llm_pick_action(
     for attempt in range(retries):
         try:
             resp = client.chat.completions.create(
-                model=AZURE_DEPLOYMENT,
+                model=LLM_MODEL,
                 messages=[{"role": "system", "content": system_msg},
                           {"role": "user", "content": user_msg}],
                 max_completion_tokens=max_completion_tokens,
@@ -501,7 +490,8 @@ def run_llm_policy(
         "elapsed_sec": time.time() - t0,
         "policy": {
             "type": "gpt-5.4-mini_llm_policy",
-            "model": AZURE_DEPLOYMENT,
+            "model": LLM_MODEL,
+            "endpoint": LLM_API_BASE_URL,
             "llm_pick_rate": llm_pick_rate,
             "fallback_count": accountant.fallback_count,
             "action_entropy_bits": entropy,

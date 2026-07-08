@@ -30,6 +30,7 @@ from worldmodelsoc.pipeline.modules import (
     MemoryStore, next_state_predictor, prediction_evaluator,
     token_profiler_snapshot,
 )
+from worldmodelsoc.llm_config import LLM_API_BASE_URL, LLM_MODEL  # noqa: E402
 
 
 # ==============================================================================
@@ -312,9 +313,9 @@ def run_pipeline(toy_graph: Dict[str, Any], n_steps: int, seed: int,
             "seed": seed,
         },
         "llm": {
-            "provider": "Azure",
-            "model": os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini"),
-            "endpoint": os.environ.get("AZURE_OPENAI_ENDPOINT", "YOUR_AZURE_OPENAI_ENDPOINT"),
+            "provider": "OpenAI-compatible",
+            "model": LLM_MODEL,
+            "endpoint": LLM_API_BASE_URL,
         },
         "seed": seed,
         "code_version": "anchor_2_v0.1",

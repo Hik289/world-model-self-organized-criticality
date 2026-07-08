@@ -10,41 +10,28 @@
   6. Prediction Evaluator    — 打 error_magnitude 分
   7. Token Profiler          — 每 100 step (或每 5 step 在 toy sanity) snapshot 一次 token 使用
 
-Azure LLM: gpt-5.4-mini via API key (backup path, DefaultAzureCredential 在 dltank 不可用)。
+LLM calls use an OpenAI-compatible chat-completions endpoint.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 import time
-from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Tuple
 
 from openai import OpenAI
+from worldmodelsoc.llm_config import LLM_MODEL, make_openai_client
 
 
 # ==============================================================================
-# LLM client (仅在代码中, 绝对不写入环境变量)
+# LLM client
 # ==============================================================================
-
-AZURE_ENDPOINT = os.environ.get("AZURE_OPENAI_ENDPOINT", "YOUR_AZURE_OPENAI_ENDPOINT")
-AZURE_DEPLOYMENT = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini")
-_PROJECT_ROOT = Path(__file__).resolve().parents[3]
-_DEFAULT_KEY_PATH = _PROJECT_ROOT / ".secrets" / "azure.key"
-
-
-def _load_azure_key(key_path: str | None = None) -> str:
-    path = Path(key_path or os.environ.get("WORLDMODELSOC_AZURE_KEY_PATH") or _DEFAULT_KEY_PATH)
-    with open(path, "r", encoding="utf-8") as f:
-        return f.read().strip()
-
 
 def make_client(key_path: str | None = None) -> OpenAI:
-    return OpenAI(base_url=AZURE_ENDPOINT, api_key=_load_azure_key(key_path))
+    return make_openai_client(key_path)
 
 
 # ==============================================================================
@@ -67,7 +54,7 @@ def _chat(client: OpenAI, system: str, user: str, acc: TokenAccumulator,
     for i in range(retries):
         try:
             resp = client.chat.completions.create(
-                model=AZURE_DEPLOYMENT,
+                model=LLM_MODEL,
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user", "content": user},

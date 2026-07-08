@@ -4,7 +4,7 @@ Method comparison — faithful backend implementations with true prompt concaten
 Cleanroom: scale_free |V|=100 seed=42 LLM policy (gpt-5.4-mini).
 - 8 methods each: N=2000 (B1: N=500)
 - context 真正拼入 LLM prompt
-- tokens_actual = Azure usage.prompt_tokens sum / N
+- tokens_actual = chat-completion usage.prompt_tokens sum / N
 - tokens_estimator (旧) 也报作双数
 - Schema envelope v0.1.1 for mem_time/actions sidecar
 
@@ -34,24 +34,15 @@ from worldmodelsoc.memory.backends import (  # noqa: E402
     B1_FullHistory, B2_SlidingWindow, B3_FlatRetrieval, B4_FrequencyCache,
     B5_RecencyCache, B6_HierarchicalSummary, B7_GraphMemory, B8_CTWM,
 )
+from worldmodelsoc.llm_config import LLM_MODEL, make_openai_client  # noqa: E402
 
 
-AZURE_ENDPOINT = os.environ.get("AZURE_OPENAI_ENDPOINT", "YOUR_AZURE_OPENAI_ENDPOINT")
-AZURE_DEPLOYMENT = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini")
 PRICE_PROMPT_PER_1M = 0.15
 PRICE_COMPL_PER_1M = 0.60
 
 
-def _load_azure_key():
-    path = os.environ.get("WORLDMODELSOC_AZURE_KEY_PATH")
-    if path is None:
-        path = ROOT / ".secrets" / "azure.key"
-    with open(path) as f:
-        return f.read().strip()
-
-
 def make_client():
-    return OpenAI(base_url=AZURE_ENDPOINT, api_key=_load_azure_key())
+    return make_openai_client()
 
 
 class CostAccountant:
@@ -105,7 +96,7 @@ def llm_pick_action(client, current_sid, actions, neighbors, recent_states,
     for _ in range(retries):
         try:
             resp = client.chat.completions.create(
-                model=AZURE_DEPLOYMENT,
+                model=LLM_MODEL,
                 messages=[{"role":"system","content":system_msg},
                           {"role":"user","content":user_msg}],
                 max_completion_tokens=max_completion_tokens,
@@ -158,7 +149,7 @@ def run_method(method_name, n_nodes, n_steps, seed, budget_usd, tau, out_dir):
     per_step_tokens_est: List[int] = []
     per_step_action_correct: List[bool] = []
     per_step_state: List[str] = []
-    per_step_prompt_tokens: List[int] = []  # tokens_actual per step (from Azure)
+    per_step_prompt_tokens: List[int] = []  # tokens_actual per step
     per_step_ctx_chars: List[int] = []
     per_step_b8_core_fill: List[int] = []
     per_step_b8_tail_fill: List[int] = []
@@ -475,7 +466,7 @@ def main():
                     "budget_total_usd": args.budget_total,
                     "policy": "gpt-5.4-mini_llm_policy",
                     "backends_faithful": True,
-                    "notes": "v2 with real prompt concat + tokens_actual from Azure usage",
+                    "notes": "v2 with real prompt concat + tokens_actual from chat-completion usage",
                     "ctwm_v1_limitations": "ũ=0.5 constant, 无 dynamic Tail expansion; see idea.md §4.7 rules 2/3/7 (future work)"},
         "total_cost_usd": total_cost,
         "results": all_results,

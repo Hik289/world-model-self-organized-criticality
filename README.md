@@ -1,18 +1,20 @@
 # World Models Are Heavy-Tailed
 
-[![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Paper](https://img.shields.io/badge/paper-under%20review-lightgrey.svg)](#citation)
-[![Code style](https://img.shields.io/badge/code-src%20layout-black.svg)](src/worldmodelsoc)
+<p align="center">
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.10%2B-blue.svg" alt="Python 3.10+"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="MIT License"></a>
+  <a href="#citation"><img src="https://img.shields.io/badge/paper-under%20review-lightgrey.svg" alt="Paper under review"></a>
+  <a href="#api-configuration"><img src="https://img.shields.io/badge/API-OpenAI%20compatible-blueviolet.svg" alt="OpenAI-compatible API"></a>
+</p>
 
 Official code for **World Models Are Heavy-Tailed: Static Power-Law Emerges Under Semantically-Driven Policy**.
 
-The repository studies whether API-agent world models exhibit self-organized criticality (SOC) signatures in memory access. Random-walk policies produce heavy-tailed log-normal access patterns, while semantically driven LLM policies shift the memory distribution toward a truncated power law. We also include Core-Tail World Model (CTWM), a memory allocation mechanism that uses an external tail coefficient `tau` to trade off core reuse and tail coverage.
+The repository studies whether LLM-agent world models exhibit self-organized criticality (SOC) signatures in memory access. Random-walk policies produce heavy-tailed log-normal access patterns, while semantically driven LLM policies shift the memory distribution toward a truncated power law. We also include Core-Tail World Model (CTWM), a memory allocation mechanism that uses an external tail coefficient `tau` to trade off core reuse and tail coverage.
 
 ## Highlights
 
 - Synthetic graph-world generator for controlled topology, scale, and payload semantics.
-- LLM-policy walker experiments with Azure OpenAI-compatible chat completions.
+- LLM-policy walker experiments with an OpenAI-compatible chat-completions API.
 - Memory baselines including full history, sliding window, flat retrieval, frequency cache, recency cache, hierarchical summary, graph memory, and CTWM.
 - Distribution-analysis artifacts for log-normal, power-law, truncated power-law, and temporal PSD checks.
 - ALFWorld external-validity script for task-level token and tail-retrieval behavior.
@@ -46,7 +48,7 @@ The repository studies whether API-agent world models exhibit self-organized cri
 ## Repository Layout
 
 ```text
-worldmodelsoc_code/
+world-model-self-organized-criticality/
 ├── assets/figures/              # PNG figures used in the README and paper
 ├── scripts/                     # Reproducible entry points
 │   ├── run_random_walk_scaling.py
@@ -72,8 +74,8 @@ worldmodelsoc_code/
 ## Installation
 
 ```bash
-git clone <YOUR_REPO_URL>
-cd worldmodelsoc_code
+git clone git@github.com:Hik289/world-model-self-organized-criticality.git
+cd world-model-self-organized-criticality
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -88,15 +90,22 @@ pip install -e ".[alfworld]"
 
 ## API Configuration
 
-LLM-based scripts use an OpenAI-compatible Azure endpoint. Set:
+LLM-based scripts use a general OpenAI-compatible chat-completions endpoint. Set:
 
 ```bash
-export AZURE_OPENAI_ENDPOINT="https://YOUR_RESOURCE.services.ai.azure.com/openai/v1"
-export AZURE_OPENAI_API_KEY="your-api-key"
-export AZURE_OPENAI_DEPLOYMENT="gpt-4o-mini"
+export LLM_API_BASE_URL="https://YOUR_LLM_API_BASE_URL/v1"
+export LLM_API_KEY="your-api-key"
+export LLM_MODEL="gpt-4o-mini"
 ```
 
-Alternatively, place the key at `.secrets/azure.key` and keep `.secrets/` untracked.
+Alternatively, place the key at `.secrets/llm.key` and keep `.secrets/` untracked:
+
+```bash
+mkdir -p .secrets
+printf '%s\n' "your-api-key" > .secrets/llm.key
+```
+
+The legacy `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_DEPLOYMENT`, and `.secrets/azure.key` settings are still accepted for existing local setups.
 
 ## Quick Start
 
@@ -189,7 +198,7 @@ Each run writes JSON/JSONL artifacts under the requested `--out_dir`, typically:
   author  = {Anonymous Authors},
   journal = {Under review},
   year    = {2026},
-  url     = {https://github.com/your-org/worldmodelsoc_code}
+  url     = {https://github.com/Hik289/world-model-self-organized-criticality}
 }
 ```
 

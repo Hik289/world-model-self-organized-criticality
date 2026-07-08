@@ -19,9 +19,8 @@ from alfworld.agents.environment.alfred_tw_env import AlfredTWEnv
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from worldmodelsoc.memory.backends_ctwm import B7_GraphMemory, B8_CTWM  # noqa: E402
+from worldmodelsoc.llm_config import LLM_MODEL, make_openai_client  # noqa: E402
 
-AZURE_ENDPOINT = os.environ.get("AZURE_OPENAI_ENDPOINT", "YOUR_AZURE_OPENAI_ENDPOINT")
-AZURE_DEPLOYMENT = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini")
 PRICE_PROMPT_PER_1M = 0.15
 PRICE_COMPL_PER_1M = 0.60
 
@@ -40,16 +39,8 @@ TASK_TYPES_ORDER = [
 ]
 
 
-def _load_azure_key():
-    path = os.environ.get("WORLDMODELSOC_AZURE_KEY_PATH")
-    if path is None:
-        path = ROOT / ".secrets" / "azure.key"
-    with open(path) as f:
-        return f.read().strip()
-
-
 def make_client():
-    return OpenAI(base_url=AZURE_ENDPOINT, api_key=_load_azure_key())
+    return make_openai_client()
 
 
 class CostAccountant:
@@ -149,7 +140,7 @@ def llm_react_step(client, obs, admissible, task_desc, memory_context,
     for _ in range(retries):
         try:
             resp = client.chat.completions.create(
-                model=AZURE_DEPLOYMENT,
+                model=LLM_MODEL,
                 messages=[{"role":"system","content":system},{"role":"user","content":user}],
                 max_completion_tokens=150)
             if resp.usage:

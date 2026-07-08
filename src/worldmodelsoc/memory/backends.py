@@ -10,7 +10,7 @@ All backends implement:
   - access_counter (Counter)
 
 Key change from v1: context_string is REAL and gets concatenated into the LLM prompt.
-tokens_actual reported from Azure usage.prompt_tokens sum / N.
+tokens_actual reported from chat-completion usage.prompt_tokens sum / N.
 """
 
 from __future__ import annotations
