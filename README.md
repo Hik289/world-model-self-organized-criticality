@@ -1,10 +1,8 @@
 # World Models Are Heavy-Tailed
 
 <p align="center">
-  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.10%2B-blue.svg" alt="Python 3.10+"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="MIT License"></a>
-  <a href="#citation"><img src="https://img.shields.io/badge/paper-under%20review-lightgrey.svg" alt="Paper under review"></a>
-  <a href="#api-configuration"><img src="https://img.shields.io/badge/API-OpenAI%20compatible-blueviolet.svg" alt="OpenAI-compatible API"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="MIT license"></a>
+  <a href="pyproject.toml"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB.svg" alt="Python 3.10+"></a>
 </p>
 
 Official code for **World Models Are Heavy-Tailed: Static Power-Law Emerges Under Semantically-Driven Policy**.
