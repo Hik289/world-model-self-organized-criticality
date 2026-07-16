@@ -9,7 +9,13 @@ Official code for **World Models Are Heavy-Tailed: Static Power-Law Emerges Unde
 
 The repository studies whether LLM-agent world models exhibit self-organized criticality (SOC) signatures in memory access. Random-walk policies produce heavy-tailed log-normal access patterns, while semantically driven LLM policies shift the memory distribution toward a truncated power law. We also include Core-Tail World Model (CTWM), a memory allocation mechanism that uses an external tail coefficient `tau` to trade off core reuse and tail coverage.
 
-## Highlights
+## At a Glance
+
+- **Research question.** Do world-model memory systems exhibit heavy-tailed access and failure dynamics?
+- **Core idea.** The project studies random-walk, LLM-policy, retriever, and Core-Tail World Model regimes under controlled comparisons.
+- **What is included.** Figures, retrieval ladders, reproduction scripts, expected artifacts, and key reported results.
+
+## Key Contributions
 
 - Synthetic graph-world generator for controlled topology, scale, and payload semantics.
 - LLM-policy walker experiments with an OpenAI-compatible chat-completions API.
@@ -17,7 +23,7 @@ The repository studies whether LLM-agent world models exhibit self-organized cri
 - Distribution-analysis artifacts for log-normal, power-law, truncated power-law, and temporal PSD checks.
 - ALFWorld external-validity script for task-level token and tail-retrieval behavior.
 
-## Figures
+## Paper Figures
 
 <p align="center">
   <img src="assets/figures/intuition_lognormal_to_tpl.png" alt="Log-normal to TPL intuition" width="72%">
@@ -43,7 +49,7 @@ The repository studies whether LLM-agent world models exhibit self-organized cri
 
 **Figure 4.** Core-Tail World Model (CTWM): high-score core entries are retained for stable reuse, while tau-weighted tail sampling preserves rare but important transitions.
 
-## Repository Layout
+## Repository Structure
 
 ```text
 world-model-self-organized-criticality/
