@@ -21,3 +21,20 @@ venv/
 *.token
 
 .DS_Store
+
+# Shared research-artifact hygiene
+.AppleDouble
+._*
+.vscode/
+.idea/
+*.swp
+*~
+*.egg-info/
+build/
+dist/
+env/
+.env.*
+!.env.example
+runs/
+*.log
+*.tmp
