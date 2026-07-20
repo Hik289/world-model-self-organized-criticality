@@ -194,6 +194,10 @@ Each run writes JSON/JSONL artifacts under the requested `--out_dir`, typically:
 | Tau control | Increasing `tau` monotonically changes concentration statistics such as Gini and max/median. |
 | External validity | ALFWorld runs preserve the same token/tail-access trend beyond synthetic graphs. |
 
+## Reviewer Guide
+
+For a reviewer-oriented map of smoke checks, paper-scale entry points, data boundaries, and reporting metadata, see [Artifact Guide](docs/ARTIFACT.md).
+
 ## Artifact Checklist
 
 - **Code release.** Core implementations, configuration files, and reproduction entry points are versioned in this repository.
