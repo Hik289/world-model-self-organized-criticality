@@ -9,11 +9,11 @@ Official code for **World Models Are Heavy-Tailed: Static Power-Law Emerges Unde
 
 The repository studies whether LLM-agent world models exhibit self-organized criticality (SOC) signatures in memory access. Random-walk policies produce heavy-tailed log-normal access patterns, while semantically driven LLM policies shift the memory distribution toward a truncated power law. We also include Core-Tail World Model (CTWM), a memory allocation mechanism that uses an external tail coefficient `tau` to trade off core reuse and tail coverage.
 
-## At a Glance
+## Repository Summary
 
-- **Research question.** Do world-model memory systems exhibit heavy-tailed access and failure dynamics?
-- **Core idea.** The project studies random-walk, LLM-policy, retriever, and Core-Tail World Model regimes under controlled comparisons.
-- **What is included.** Figures, retrieval ladders, reproduction scripts, expected artifacts, and key reported results.
+- **Scope.** Do world-model memory systems exhibit heavy-tailed access and failure dynamics?
+- **Method.** The project studies random-walk, LLM-policy, retriever, and Core-Tail World Model regimes under controlled comparisons.
+- **Contents.** Figures, retrieval ladders, reproduction scripts, expected artifacts, and key reported results.
 
 ## Key Contributions
 
@@ -194,16 +194,16 @@ Each run writes JSON/JSONL artifacts under the requested `--out_dir`, typically:
 | Tau control | Increasing `tau` monotonically changes concentration statistics such as Gini and max/median. |
 | External validity | ALFWorld runs preserve the same token/tail-access trend beyond synthetic graphs. |
 
-## Reviewer Guide
+## Artifact Notes
 
-For a reviewer-oriented map of smoke checks, paper-scale entry points, data boundaries, and reporting metadata, see [Artifact Guide](docs/ARTIFACT.md).
+Reproduction notes are in [docs/ARTIFACT.md](docs/ARTIFACT.md): environment files, smoke checks, data boundaries, and paper-scale entry points.
 
-## Artifact Checklist
+## Reproducibility Notes
 
-- **Code release.** Core implementations, configuration files, and reproduction entry points are versioned in this repository.
-- **Reproducibility.** Start with the smoke or quick-start path before paper-scale runs; record the commit hash, Python version, backend/model identifiers, seeds, and command-line arguments.
-- **Data and credentials.** Large datasets, benchmark downloads, generated outputs, and API keys are intentionally excluded. Use the data and configuration notes above to recreate them or point to local copies.
-- **Reporting.** For paper-scale runs, keep raw run folders immutable and regenerate tables or figures from the logged artifacts with the listed analysis scripts.
+- **Release.** Source code, configuration files, and runnable entry points are tracked here.
+- **Runs.** Start with the smoke or quick-start commands before full grids; record commit hash, Python version, model/backend identifiers, seeds, and command-line arguments.
+- **Data.** Large datasets, benchmark downloads, generated outputs, and API keys are not tracked. Use the data/configuration notes above to recreate or point to local copies.
+- **Reporting.** Keep raw run folders fixed for paper-scale runs and regenerate tables or figures from logged artifacts with the listed scripts.
 
 ## Citation
 
