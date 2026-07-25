@@ -1,7 +1,7 @@
 """
-Synthetic Graph World — H0.anchor_1 sanity 环境实现。
+Synthetic graph-world generator and random-walk baseline.
 
-环境规格 (来自 idea.md / World_Models_Are_Heavy_Tailed_Systems.md §6):
+Environment:
 - 有向状态图 G = (V, E), |V| ∈ {100, 500, 1000}
 - 5 种图类型: uniform-degree / exponential-degree / scale-free / modular / mixed
 - 每个 state s ∈ V 携带结构化载荷:
@@ -11,7 +11,7 @@ Synthetic Graph World — H0.anchor_1 sanity 环境实现。
     - actions: 1-3 个 (每个 action 决定一个后继)
 - agent policy: random-walk baseline (从当前 state 的 outgoing edges 里 uniform 抽一个 action)
 
-本文件不做 LLM 调用, 纯 CPU 生成 + 记录, 满足 anchor_1 的 A1-A5 assertion 检验。
+This module is CPU-only and includes structural checks for generated runs.
 """
 
 from __future__ import annotations
@@ -69,6 +69,10 @@ def build_graph(graph_type: str, n_nodes: int, seed: int = 42) -> nx.DiGraph:
     """
     根据 graph_type + n_nodes 构造有向图, 返回 strongly connected DiGraph。
     """
+    if graph_type not in GRAPH_TYPES:
+        raise ValueError(f"Unknown graph_type: {graph_type}")
+    if n_nodes < 6:
+        raise ValueError("n_nodes must be at least 6")
     rng = random.Random(seed)
     np_rng = np.random.default_rng(seed)
 
@@ -157,9 +161,6 @@ def build_graph(graph_type: str, n_nodes: int, seed: int = 42) -> nx.DiGraph:
             g.add_edge(a, b)
             g.add_edge(b, a)
 
-    else:
-        raise ValueError(f"Unknown graph_type: {graph_type}")
-
     # 确保 strongly connected (对 random walk 至关重要)
     g = _ensure_strongly_connected_di(g, rng)
 
@@ -180,7 +181,7 @@ def build_graph(graph_type: str, n_nodes: int, seed: int = 42) -> nx.DiGraph:
 @dataclass
 class StatePayload:
     """
-    每个 state 携带的结构化内容, 满足 idea.md §6 的 3-8/2-6/1-4/1-3 规格。
+    Structured state content with bounded entity, relation, constraint, and action counts.
     """
     entities: List[str] = field(default_factory=list)
     relations: List[Tuple[str, str, str]] = field(default_factory=list)  # (head, rel, tail)
@@ -229,6 +230,61 @@ def build_state_payloads(g: nx.DiGraph, seed: int = 42) -> Dict[int, StatePayloa
     return payloads
 
 
+def neighbor_segment(neighbors: List[int], n_actions: int, action_idx: int) -> List[int]:
+    """Return the neighbor group represented by one action index."""
+    if n_actions < 1:
+        raise ValueError("n_actions must be at least 1")
+    if not 0 <= action_idx < n_actions:
+        raise ValueError("action_idx is out of range")
+    if not neighbors:
+        return []
+    if n_actions > len(neighbors):
+        raise ValueError("n_actions cannot exceed the number of neighbors")
+    segment_size = max(1, len(neighbors) // n_actions)
+    start = action_idx * segment_size
+    end = start + segment_size if action_idx < n_actions - 1 else len(neighbors)
+    segment = neighbors[start:end] if start < len(neighbors) else neighbors
+    return segment or neighbors
+
+
+def action_index_for_neighbor(
+    neighbors: List[int],
+    n_actions: int,
+    neighbor: int,
+) -> int:
+    """Return the action index whose segment contains ``neighbor``."""
+    if neighbor not in neighbors:
+        raise ValueError("neighbor is not in the supplied neighbor list")
+    for action_idx in range(n_actions):
+        if neighbor in neighbor_segment(neighbors, n_actions, action_idx):
+            return action_idx
+    raise RuntimeError("no action segment contains the selected neighbor")
+
+
+def describe_action_options(
+    g: nx.DiGraph,
+    payloads: Dict[int, StatePayload],
+    node: int,
+) -> List[str]:
+    """Describe each action using the payloads of its reachable neighbor group."""
+    neighbors = list(g.successors(node))
+    actions = payloads[node].actions
+    descriptions = []
+    for action_idx, action in enumerate(actions):
+        targets = neighbor_segment(neighbors, len(actions), action_idx)
+        summaries = []
+        for target in targets[:3]:
+            payload = payloads[target]
+            summaries.append(
+                f"{target}: entities={payload.entities[:2]}, "
+                f"constraints={payload.constraints[:2]}"
+            )
+        if len(targets) > 3:
+            summaries.append(f"+{len(targets) - 3} more")
+        descriptions.append(f"{action} -> " + "; ".join(summaries))
+    return descriptions
+
+
 # ==============================================================================
 # Random Walk Agent
 # ==============================================================================
@@ -246,6 +302,15 @@ def run_random_walk(
       states: 长度 n_steps 的 state 序列 (state 是 int node id)
       transitions: 长度 n_steps-1 的 (prev, action, next) 序列
     """
+    if n_steps < 1:
+        raise ValueError("n_steps must be at least 1")
+    if not g:
+        raise ValueError("g must contain at least one node")
+    if start_node is not None and start_node not in g:
+        raise ValueError("start_node is not present in g")
+    missing_payloads = set(g) - set(payloads)
+    if missing_payloads:
+        raise ValueError(f"missing payloads for {len(missing_payloads)} nodes")
     rng = random.Random(seed + 2)
     if start_node is None:
         start_node = rng.choice(list(g.nodes()))
@@ -258,12 +323,11 @@ def run_random_walk(
 
     for _step in range(n_steps - 1):
         neighbors = neighbors_cache[current]
-        # 用 action 选择: 从 actions 中随便挑一个 action, 然后
-        # 从 out-neighbors 里 uniform 采 (action 名称记录, 后继按拓扑选)
         actions = action_cache[current]
-        action = rng.choice(actions)
-        # 后继按 uniform 选 (确保 random walk baseline)
+        # Sample the next node uniformly, then record its corresponding action.
         nxt = rng.choice(neighbors)
+        action_idx = action_index_for_neighbor(neighbors, len(actions), nxt)
+        action = actions[action_idx]
         transitions.append((current, action, nxt))
         states.append(nxt)
         current = nxt
@@ -380,7 +444,7 @@ def evaluate_run(
 
 
 # ==============================================================================
-# 示例 JSONL emit (每图类型 1 个短 run, 用于给下游 data_scientist 看数据结构)
+# Sample JSONL output
 # ==============================================================================
 
 
@@ -399,8 +463,8 @@ def emit_sample_jsonl(
 ) -> str:
     """
     写一段短 JSONL (前 short_len 步), 遵循 data/log_schema.json v0.1.0。
-    只写 state + transition + token_profile + meta (不含 memory_access / prediction_error,
-    因为 anchor_1 只测环境; anchor_2 会补上完整 7 事件类型).
+    Writes state, transition, token-profile, and metadata events. Memory and
+    prediction events are produced by the end-to-end pipeline.
     返回实际 run_id。
     """
     import datetime as dt
@@ -429,7 +493,7 @@ def emit_sample_jsonl(
             "event_seq": meta_seq,
             "timestamp_utc": start_time_utc,
             "wallclock_ms_since_run_start": start_wallclock_ms,
-            "note": f"sample JSONL for anchor_env, graph_type={graph_type}, n_nodes={n_nodes}",
+            "note": f"sample graph-world JSONL, graph_type={graph_type}, n_nodes={n_nodes}",
             "kind": "run_start",
         }
         f.write(json.dumps(rec) + "\n")
@@ -598,7 +662,7 @@ def main():
     # 写 results.json
     results_path = os.path.join(args.out_dir, "results.json")
     out_obj = {
-        "hypothesis": "H0.anchor_1",
+        "study": "synthetic_graph_world_checks",
         "n_steps_per_run": args.n_steps,
         "seed": args.seed,
         "n_combos": len(combos),

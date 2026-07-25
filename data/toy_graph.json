@@ -1,0 +1,56 @@
+{
+  "canonical_state_ids": [
+    "hallway",
+    "kitchen",
+    "living_room",
+    "bedroom",
+    "bathroom"
+  ],
+  "states": [
+    {
+      "state_id": "hallway",
+      "canonical_labels": ["hallway", "corridor"],
+      "observation_template": "You are in the hallway between the rooms.",
+      "entities": ["door", "coat rack", "lamp"],
+      "actions_available": ["enter kitchen", "enter living room", "enter bedroom", "enter bathroom"]
+    },
+    {
+      "state_id": "kitchen",
+      "canonical_labels": ["kitchen", "cooking area"],
+      "observation_template": "You are in the kitchen beside the counter.",
+      "entities": ["counter", "sink", "refrigerator"],
+      "actions_available": ["return to hallway"]
+    },
+    {
+      "state_id": "living_room",
+      "canonical_labels": ["living room", "lounge"],
+      "observation_template": "You are in the living room near the sofa.",
+      "entities": ["sofa", "television", "table"],
+      "actions_available": ["return to hallway"]
+    },
+    {
+      "state_id": "bedroom",
+      "canonical_labels": ["bedroom", "sleeping room"],
+      "observation_template": "You are in the bedroom next to the bed.",
+      "entities": ["bed", "dresser", "nightstand"],
+      "actions_available": ["return to hallway"]
+    },
+    {
+      "state_id": "bathroom",
+      "canonical_labels": ["bathroom", "washroom"],
+      "observation_template": "You are in the bathroom beside the sink.",
+      "entities": ["sink", "mirror", "shower"],
+      "actions_available": ["return to hallway"]
+    }
+  ],
+  "edges_ground_truth": [
+    ["hallway", "enter_kitchen", "kitchen"],
+    ["hallway", "enter_living_room", "living_room"],
+    ["hallway", "enter_bedroom", "bedroom"],
+    ["hallway", "enter_bathroom", "bathroom"],
+    ["kitchen", "return_to_hallway", "hallway"],
+    ["living_room", "return_to_hallway", "hallway"],
+    ["bedroom", "return_to_hallway", "hallway"],
+    ["bathroom", "return_to_hallway", "hallway"]
+  ]
+}

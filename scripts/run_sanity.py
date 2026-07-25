@@ -1,5 +1,5 @@
 """
-Toy 5-state 图 sanity 驱动脚本 (H0.anchor_2).
+Toy five-state end-to-end pipeline check.
 
 流程:
   1. 加载 toy_graph.json (5-state 手工图 + GT edges)
@@ -43,6 +43,8 @@ def generate_gt_trajectory(toy_graph: Dict[str, Any], n_steps: int, seed: int) -
     生成 n_steps 步的 GT 状态序列 + transition 序列。
     使用 edges_ground_truth 作为可用转移, 每步随机选一条合法出边。
     """
+    if n_steps < 1:
+        raise ValueError("n_steps must be at least 1")
     rng = random.Random(seed)
     edges: List[Tuple[str, str, str]] = [tuple(e) for e in toy_graph["edges_ground_truth"]]
     # 邻接表: state -> [(action, next_state)]
@@ -118,7 +120,7 @@ def run_pipeline(toy_graph: Dict[str, Any], n_steps: int, seed: int,
     os.makedirs(out_dir, exist_ok=True)
     logs_dir = os.path.join(out_dir, "logs")
     os.makedirs(logs_dir, exist_ok=True)
-    run_id = f"anchor2_toy5_seed{seed}"
+    run_id = f"sanity_toy5_seed{seed}"
     events_path = os.path.join(logs_dir, f"{run_id}_events.jsonl")
     manifest_path = os.path.join(logs_dir, f"{run_id}_manifest.json")
 
@@ -128,7 +130,7 @@ def run_pipeline(toy_graph: Dict[str, Any], n_steps: int, seed: int,
     mem = MemoryStore()
 
     # 事件 seq 计数器 (per event_type)
-    seq = {t: 0 for t in ["state", "transition", "memory_access", "prediction_error", "token_profile", "meta"]}
+    seq = dict.fromkeys(["state", "transition", "memory_access", "prediction_error", "token_profile", "meta"], 0)
 
     start_time_utc = dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
     start_wall = time.time()
@@ -247,7 +249,7 @@ def run_pipeline(toy_graph: Dict[str, Any], n_steps: int, seed: int,
                     "prediction_correct": eval_out["prediction_correct"],
                     "error_magnitude": eval_out["error_magnitude"],
                     "prediction_confidence": pred_conf,
-                    "tail_or_core": "unknown",  # anchor_2 sanity 不做 core/tail 分区
+                    "tail_or_core": "unknown",  # This check does not partition core and tail.
                     "avalanche_size": avalanche,
                 })
                 prediction_events.append({
@@ -318,7 +320,7 @@ def run_pipeline(toy_graph: Dict[str, Any], n_steps: int, seed: int,
             "endpoint": LLM_API_BASE_URL,
         },
         "seed": seed,
-        "code_version": "anchor_2_v0.1",
+        "code_version": "sanity_v0.1",
         "counts": {
             "state_events": seq["state"],
             "transition_events": seq["transition"],
@@ -341,7 +343,7 @@ def run_pipeline(toy_graph: Dict[str, Any], n_steps: int, seed: int,
     B1_pass = B1_rate >= 0.9
 
     # B2: extracted_transitions 覆盖 GT transitions 的 ≥90%
-    gt_trans_ids = set(f"{u}::{a}::{v}" for (u, a, v) in gt_transitions)
+    gt_trans_ids = {f"{u}::{a}::{v}" for (u, a, v) in gt_transitions}
     ext_trans_ids = set(extracted_transitions)
     coverage = len(gt_trans_ids & ext_trans_ids) / max(1, len(gt_trans_ids))
     B2_pass = coverage >= 0.9
@@ -364,7 +366,7 @@ def run_pipeline(toy_graph: Dict[str, Any], n_steps: int, seed: int,
     all_pass = all([B1_pass, B2_pass, B3_pass, B4_pass, B5_pass, B6_pass])
 
     metrics = {
-        "hypothesis": "H0.anchor_2",
+        "study": "toy_pipeline_sanity",
         "run_id": run_id,
         "n_steps": n_steps,
         "seed": seed,
@@ -400,10 +402,18 @@ def run_pipeline(toy_graph: Dict[str, Any], n_steps: int, seed: int,
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--toy_graph", type=str, required=True)
+    parser.add_argument(
+        "--toy_graph",
+        type=str,
+        default=str(ROOT / "data" / "toy_graph.json"),
+    )
     parser.add_argument("--n_steps", type=int, default=30)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--out_dir", type=str, required=True)
+    parser.add_argument(
+        "--out_dir",
+        type=str,
+        default=str(ROOT / "results" / "sanity"),
+    )
     args = parser.parse_args()
 
     with open(args.toy_graph, "r", encoding="utf-8") as f:

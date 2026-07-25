@@ -1,20 +1,11 @@
-"""
-ALFWorld external-validity study with explicit AlfredTWEnv import for audit trail.
-Uses `from alfworld.agents.environment.alfred_tw_env import AlfredTWEnv` (Verifier grep-verifiable).
-ReAct scaffold self-implemented per Yao et al. 2022 (alfworld has no official ReAct trainer).
-"""
+"""ALFWorld external-validity study using a compact ReAct policy."""
 
 from __future__ import annotations
-import argparse, glob, hashlib, json, os, random, re, sys, time
-from collections import Counter
+import argparse, hashlib, json, os, random, re, sys, time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict
 
 import numpy as np
-from openai import OpenAI
-
-# AUDIT TRAIL: explicit official alfworld import
-from alfworld.agents.environment.alfred_tw_env import AlfredTWEnv
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -68,7 +59,13 @@ def canonical_action(a: str) -> str:
     return re.sub(r"\s+", "_", a.strip().lower())[:40]
 
 
-def build_alfredworld_config(data_root: str, task_type: str, max_steps: int = 50) -> Dict[str, Any]:
+def build_alfredworld_config(
+    data_root: str,
+    task_type: str,
+    max_steps: int = 50,
+    seed: int = 42,
+) -> Dict[str, Any]:
+    data_root = os.path.abspath(os.path.expanduser(data_root))
     tt_id = TASK_TYPE_IDS[task_type]
     logic_dir = os.path.join(os.path.dirname(data_root), "..", "logic")
     return {
@@ -97,7 +94,7 @@ def build_alfredworld_config(data_root: str, task_type: str, max_steps: int = 50
             "grammar": os.path.join(logic_dir, "alfred.twl2"),
         },
         "training": {"batch_size": 1},
-        "general": {"training_method": "dagger", "random_seed": 42, "visdom": False},
+        "general": {"training_method": "dagger", "random_seed": seed, "visdom": False},
         "dagger": {
             "training": {
                 "max_nb_steps_per_episode": max_steps,
@@ -108,18 +105,25 @@ def build_alfredworld_config(data_root: str, task_type: str, max_steps: int = 50
         "rl": {
             "training": {"max_nb_steps_per_episode": max_steps, "batch_size": 1},
         },
-        "checkpoint": {"report_frequency": 100, "experiment_tag": "rev5v2b"},
+        "checkpoint": {"report_frequency": 100, "experiment_tag": "worldmodelsoc"},
     }
 
 
 def load_alfredworld_env_official(config: Dict[str, Any]):
-    """AUDIT TRAIL: uses AlfredTWEnv directly."""
+    """Construct the official ALFWorld text environment."""
+    try:
+        from alfworld.agents.environment.alfred_tw_env import AlfredTWEnv
+    except ImportError as exc:
+        raise RuntimeError(
+            'ALFWorld is optional; install it with pip install -e ".[alfworld]"'
+        ) from exc
     env = AlfredTWEnv(config, train_eval="eval_in_distribution")
     return env
 
 
 def llm_react_step(client, obs, admissible, task_desc, memory_context,
-                   recent_states, recent_actions, accountant, retries=2):
+                   recent_states, recent_actions, accountant, fallback_rng,
+                   retries=2):
     if not admissible:
         return 0, False, "", "no admissible"
     admissible_shown = admissible[:30]
@@ -158,7 +162,8 @@ def llm_react_step(client, obs, admissible, task_desc, memory_context,
                     idx = int(obj.get("cmd_idx", -1))
                     if 0 <= idx < n_cmd:
                         return idx, True, thought, ""
-                except Exception: pass
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    pass
             for m2 in re.findall(r"\d+", candidate):
                 i = int(m2)
                 if 0 <= i < n_cmd:
@@ -168,10 +173,20 @@ def llm_react_step(client, obs, admissible, task_desc, memory_context,
             last_err = e; time.sleep(1.0)
     accountant.fallback_count += 1
     accountant.error_count += 1
-    return random.Random().randrange(n_cmd), False, "", str(last_err)[:200]
+    return fallback_rng.randrange(n_cmd), False, "", str(last_err)[:200]
 
 
-def run_one_episode(env, method_name, max_steps, budget_ep, tau, run_id, task_type, game_file):
+def run_one_episode(
+    env,
+    method_name,
+    max_steps,
+    budget_ep,
+    tau,
+    run_id,
+    task_type,
+    game_file,
+    seed,
+):
     t0 = time.time()
     obs_batch, infos = env.reset()
     obs = obs_batch[0] if isinstance(obs_batch, (list, tuple)) else obs_batch
@@ -179,11 +194,20 @@ def run_one_episode(env, method_name, max_steps, budget_ep, tau, run_id, task_ty
 
     client = make_client()
     accountant = CostAccountant(budget=budget_ep)
+    fallback_rng = random.Random(seed)
 
     if method_name == "B7_GraphMemory":
         mem = B7_GraphMemory(episode_length=200, top_k=3); uses_entities = True
     elif method_name == "B8_CTWM":
-        mem = B8_CTWM(tau=tau, core_pct=0.30, core_slots=3, tail_slots=2, capacity=200); uses_entities = False
+        mem = B8_CTWM(
+            tau=tau,
+            core_pct=0.30,
+            core_slots=3,
+            tail_slots=2,
+            capacity=200,
+            seed=seed,
+        )
+        uses_entities = False
     else:
         raise ValueError(f"unknown: {method_name}")
 
@@ -201,13 +225,13 @@ def run_one_episode(env, method_name, max_steps, budget_ep, tau, run_id, task_ty
             admissible = admissible_raw
         if not admissible: break
 
-        hints = mem.retrieve_hints(prev_sid, step)
+        mem.retrieve_hints(prev_sid, step)
         mem_ctx = mem.context_string(prev_sid)
 
         prompt_before = accountant.tokens_prompt
-        cmd_idx, is_llm, thought, err = llm_react_step(
+        cmd_idx, is_llm, thought, _error = llm_react_step(
             client, obs, admissible, task_desc, mem_ctx,
-            recent_states, recent_actions, accountant)
+            recent_states, recent_actions, accountant, fallback_rng)
         prompt_delta = accountant.tokens_prompt - prompt_before
         per_step_tokens.append(prompt_delta)
 
@@ -216,7 +240,7 @@ def run_one_episode(env, method_name, max_steps, budget_ep, tau, run_id, task_ty
         recent_actions.append(action_c)
 
         try:
-            obs_batch, reward, done, infos = env.step([cmd])
+            obs_batch, _reward, done, infos = env.step([cmd])
             obs_next = obs_batch[0] if isinstance(obs_batch, (list, tuple)) else obs_batch
             done_val = done[0] if isinstance(done, (list, tuple)) else done
         except Exception as e:
@@ -289,10 +313,15 @@ def main():
     for method in args.methods:
         print(f"\n===== METHOD {method} =====", flush=True)
         for tt in TASK_TYPES_ORDER:
-            config = build_alfredworld_config(args.data_root, tt, args.max_steps)
+            config = build_alfredworld_config(
+                args.data_root,
+                tt,
+                args.max_steps,
+                seed=args.seed,
+            )
             try:
                 env = load_alfredworld_env_official(config)
-                game_files = env.game_files[:args.n_ep_per_type]
+                game_files = sorted(env.game_files)[:args.n_ep_per_type]
                 print(f"[TASKS] {tt}: {len(env.game_files)} available, using first {len(game_files)}", flush=True)
             except Exception as e:
                 print(f"  ERROR loading env for {tt}: {e}", flush=True)
@@ -300,13 +329,16 @@ def main():
 
             for i in range(len(game_files)):
                 if total_cost >= args.budget_total:
-                    print(f"  [BUDGET total] stop", flush=True); break
-                run_id = f"{method}_{tt}_{i:02d}_rev5v2b"
+                    print("  [BUDGET total] stop", flush=True); break
+                run_id = f"{method}_{tt}_{i:02d}"
                 print(f"[EP] {method} / {tt} / #{i+1}", flush=True)
+                episode_env = None
                 try:
-                    env.init_env(batch_size=1)
-                    r = run_one_episode(env, method, args.max_steps, args.budget_ep,
-                                         args.tau, run_id, tt, game_files[i])
+                    env.game_files = [game_files[i]]
+                    episode_env = env.init_env(batch_size=1)
+                    r = run_one_episode(episode_env, method, args.max_steps, args.budget_ep,
+                                         args.tau, run_id, tt, game_files[i],
+                                         seed=args.seed + i)
                     all_results.append(r)
                     total_cost += r["cost_usd"]
                     print(f"    won={r['won']} steps={r['steps']} cost=${r['cost_usd']:.3f} "
@@ -316,6 +348,9 @@ def main():
                     print(f"  ERROR ep: {e}", flush=True)
                     import traceback; traceback.print_exc()
                     all_results.append({"method": method, "task_type": tt, "error": str(e)})
+                finally:
+                    if episode_env is not None and hasattr(episode_env, "close"):
+                        episode_env.close()
             if total_cost >= args.budget_total: break
         if total_cost >= args.budget_total: break
 
@@ -351,17 +386,16 @@ def main():
         }
 
     summary = {
-        "hypothesis": "H_rev5v2b_alfworld_AlfredTWEnv_import",
+        "study": "alfworld_external_validity",
         "config": vars(args),
-        "audit_trail": "uses `from alfworld.agents.environment.alfred_tw_env import AlfredTWEnv` explicitly (grep-verifiable per Verifier req)",
         "total_cost_usd": total_cost,
         "n_episodes_run": len([r for r in all_results if "won" in r]),
         "aggregates": {m: agg(m) for m in args.methods},
         "all_results_meta": [{k: v for k, v in r.items() if k != "trajectory"} for r in all_results],
     }
-    with open(os.path.join(args.out_dir, "summary_rev5v2b.json"), "w") as f:
+    with open(os.path.join(args.out_dir, "summary.json"), "w") as f:
         json.dump(summary, f, indent=2)
-    print(f"\n===== SUMMARY =====")
+    print("\n===== SUMMARY =====")
     for m in args.methods:
         a = summary["aggregates"][m]
         if a.get("n_episodes", 0) > 0:

@@ -1,35 +1,15 @@
-"""
-Frozen trajectory replay — isolate encoding vs walker-path effect on tail_err.
+"""Replay frozen trajectories under one retrieval implementation.
 
-Setup:
-- Take v2c actions.jsonl as frozen trajectory (states + actions)
-- Take v2 actions.jsonl as its own frozen trajectory
-- Re-run memory retrieve + prediction on each trajectory using both v2 and v2c backends
-- Compare tail_err across (traj, backend) matrix
-
-Key insight (see report §Metric Definitions §Walker path variance):
-  The `retrieve_hints()` logic is IDENTICAL in v2 and v2c backend
-  (both use 5-feature Core/Tail + b(r;τ) sampling). Only `context_string()` differs.
-  tail_err is computed from top-1 retrieved memory_id matching actual next_state,
-  which depends ONLY on retrieve_hints() logic, NOT on context_string().
-  
-  Therefore: on the SAME frozen trajectory, v2 backend and v2c backend produce
-  IDENTICAL tail_err. Any observed difference in v2 vs v2c results (live runs)
-  is 100% attributable to walker-path variance (encoding → LLM policy → trajectory).
-  
-  This offline replay QUANTIFIES that: replay v2c backend on v2 trajectory vs
-  v2 trajectory native = tail_err on v2 states; replay on v2c trajectory =
-  tail_err on v2c states. Diff isolates trajectory contribution.
-
-Output: isolate_analysis.md + results.json
-No API calls, ~30min.
+The replay measures trajectory-specific differences without making API calls.
+Optional live metrics may be supplied explicitly for comparison; no empirical
+values are embedded in the script.
 """
 
 from __future__ import annotations
-import argparse, json, os, random, sys
+import argparse, json, os, sys
 from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -38,15 +18,27 @@ from worldmodelsoc.memory.backends_ctwm import B8_CTWM  # noqa: E402
 
 def load_actions(path: str) -> List[Dict[str, Any]]:
     records = []
-    with open(path) as f:
-        for line in f:
+    required = {"prev", "action", "next"}
+    with open(path, encoding="utf-8") as f:
+        for line_number, line in enumerate(f, start=1):
             r = json.loads(line)
+            missing = required - set(r)
+            if missing:
+                raise ValueError(
+                    f"{path}:{line_number} is missing fields: {sorted(missing)}"
+                )
             records.append(r)
+    if not records:
+        raise ValueError(f"no action records found in {path}")
     return records
 
 
-def replay_on_trajectory(actions: List[Dict[str, Any]], tag: str,
-                          tau: float = 1.0) -> Dict[str, Any]:
+def replay_on_trajectory(
+    actions: List[Dict[str, Any]],
+    tag: str,
+    tau: float = 1.0,
+    seed: int = 42,
+) -> Dict[str, Any]:
     """
     Given a frozen list of (prev, action, next) records, replay B8_CTWM memory:
     - Write each transition
@@ -55,7 +47,13 @@ def replay_on_trajectory(actions: List[Dict[str, Any]], tag: str,
 
     Returns tail_err (bottom-50% state), plus stats.
     """
-    mem = B8_CTWM(tau=tau, core_pct=0.30, core_slots=3, tail_slots=2)
+    mem = B8_CTWM(
+        tau=tau,
+        core_pct=0.30,
+        core_slots=3,
+        tail_slots=2,
+        seed=seed,
+    )
     per_step_state: List[str] = []
     per_step_correct: List[bool] = []
 
@@ -85,7 +83,7 @@ def replay_on_trajectory(actions: List[Dict[str, Any]], tag: str,
     state_visits = Counter(per_step_state)
     sorted_by_v = sorted(state_visits.items(), key=lambda x: x[1])
     n_tail = max(1, int(len(sorted_by_v) * 0.5))
-    tail_states = set(s for s, _ in sorted_by_v[:n_tail])
+    tail_states = {state for state, _count in sorted_by_v[:n_tail]}
 
     tail_correct = []
     for i, r in enumerate(actions):
@@ -116,17 +114,20 @@ def main():
                     default=None,
                     help="Path to v2c actions.jsonl (default: auto-detect)")
     p.add_argument("--tau", type=float, default=1.0)
+    p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--live_v2_tail_err", type=float)
+    p.add_argument("--live_v2c_tail_err", type=float)
     p.add_argument("--out_dir", required=True)
     args = p.parse_args()
 
     if args.v2_actions is None:
         args.v2_actions = os.path.join(
             ROOT, "results", "method_comparison",
-            "B8_CTWM_actions.jsonl")
+            "results", "B8_CTWM_v2_actions.jsonl")
     if args.v2c_actions is None:
         args.v2c_actions = os.path.join(
             ROOT, "results", "ctwm_comparison",
-            "B8_CTWM_actions.jsonl")
+            "results", "B8_CTWM_v2c_actions.jsonl")
 
     os.makedirs(args.out_dir, exist_ok=True)
     print(f"[LOAD] v2 actions: {args.v2_actions}")
@@ -140,16 +141,43 @@ def main():
     # (only context_string differs, which doesn't affect tail_err), we
     # only need 2 replays: one per trajectory
     print("\n[REPLAY] on v2 trajectory (backend logic identical to live v2c backend since retrieve_hints unchanged)")
-    v2_result = replay_on_trajectory(v2_actions, tag="v2_trajectory")
+    v2_result = replay_on_trajectory(
+        v2_actions,
+        tag="v2_trajectory",
+        tau=args.tau,
+        seed=args.seed,
+    )
     print(f"  → tail_err = {v2_result['tail_pred_error']:.4f}")
 
     print("\n[REPLAY] on v2c trajectory (same backend)")
-    v2c_result = replay_on_trajectory(v2c_actions, tag="v2c_trajectory")
+    v2c_result = replay_on_trajectory(
+        v2c_actions,
+        tag="v2c_trajectory",
+        tau=args.tau,
+        seed=args.seed,
+    )
     print(f"  → tail_err = {v2c_result['tail_pred_error']:.4f}")
 
-    # Isolate analysis
-    live_v2_tail_err = 0.940
-    live_v2c_tail_err = 0.778
+    live_metrics_supplied = (
+        args.live_v2_tail_err is not None
+        and args.live_v2c_tail_err is not None
+    )
+    if (args.live_v2_tail_err is None) != (args.live_v2c_tail_err is None):
+        p.error("supply both live tail-error values or neither")
+    if live_metrics_supplied and not (
+        0 <= args.live_v2_tail_err <= 1
+        and 0 <= args.live_v2c_tail_err <= 1
+    ):
+        p.error("live tail-error values must be in [0, 1]")
+
+    offline_delta = (
+        v2c_result["tail_pred_error"] - v2_result["tail_pred_error"]
+    )
+    live_delta = (
+        args.live_v2c_tail_err - args.live_v2_tail_err
+        if live_metrics_supplied
+        else None
+    )
 
     isolate = {
         "study": "frozen_replay_encoding_vs_path_effect",
@@ -157,19 +185,15 @@ def main():
         "backend_context_string_differs_v2_vs_v2c": True,
         "tail_err_offline_replay_on_v2_traj": v2_result["tail_pred_error"],
         "tail_err_offline_replay_on_v2c_traj": v2c_result["tail_pred_error"],
-        "tail_err_live_v2": live_v2_tail_err,
-        "tail_err_live_v2c": live_v2c_tail_err,
-        "delta_live_v2c_v2": live_v2c_tail_err - live_v2_tail_err,
-        "delta_offline_v2c_v2": v2c_result["tail_pred_error"] - v2_result["tail_pred_error"],
+        "tail_err_live_v2": args.live_v2_tail_err,
+        "tail_err_live_v2c": args.live_v2c_tail_err,
+        "delta_live_v2c_v2": live_delta,
+        "delta_offline_v2c_v2": offline_delta,
         "notes": (
-            "In this design, retrieve_hints() logic is identical between v2 and v2c backend; "
-            "only context_string() differs (Core c=... verbose vs rank-order; Tail full triples vs count-only). "
-            "tail_pred_err is computed from retrieve_hints top-1 memory_id vs actual next state, "
-            "which is unaffected by context_string. Therefore offline replay's tail_err "
-            "for a given trajectory is deterministic — same backend gives same result. "
-            "The observed live v2 vs live v2c tail_err diff (0.940 → 0.778 = -0.162) is thus "
-            "100% attributable to walker-path variance: encoding change → LLM policy sees different hints → "
-            "chooses different actions → different trajectory → different state visit distribution → different tail_err."
+            "With a fixed seed, retrieval is deterministic for a frozen trajectory. "
+            "The offline delta therefore measures the difference between the two "
+            "recorded trajectories under the same retrieval implementation. It "
+            "does not by itself establish a causal percentage for the live-run gap."
         ),
     }
 
@@ -180,7 +204,27 @@ def main():
             "isolate_analysis": isolate,
         }, f, indent=2)
 
-    # Write isolate_analysis.md
+    if live_metrics_supplied:
+        live_section = f"""
+## Supplied live-run comparison
+
+| Run | tail_pred_err |
+|:---:|:-------------:|
+| Live v2 | {args.live_v2_tail_err:.4f} |
+| Live v2c | {args.live_v2c_tail_err:.4f} |
+| Delta (v2c - v2) | {live_delta:+.4f} |
+
+These values were supplied on the command line; the script does not embed or
+select live-run results.
+"""
+    else:
+        live_section = """
+## Live-run comparison
+
+No live metrics were supplied. Pass both `--live_v2_tail_err` and
+`--live_v2c_tail_err` to add a comparison.
+"""
+
     md = f"""# Frozen Replay Analysis: Encoding vs Walker-Path Effect on tail_err
 
 ## Design
@@ -197,7 +241,7 @@ Offline frozen-trajectory replay:
 - `context_string()`: differs (v2: verbose c=... embedded; v2c: rank-order + count-only)
 - `tail_pred_err` computation depends only on top-1 hint's memory_id vs actual next state → depends only on `retrieve_hints()`, NOT on `context_string()`
 
-**Corollary**: For a fixed trajectory, replay's tail_err is deterministic under our backend. Encoding change cannot cause tail_err diff via retrieval logic — only via LLM policy affecting trajectory.
+For a fixed trajectory and seed, replay is deterministic under this backend.
 
 ## Results
 
@@ -206,29 +250,15 @@ Offline frozen-trajectory replay:
 | v2 (live)  | B8_CTWM       | {v2_result['tail_pred_error']:.4f} |
 | v2c (live) | B8_CTWM       | {v2c_result['tail_pred_error']:.4f} |
 
-## Live run comparison
+| Delta offline (v2c trajectory - v2 trajectory) | | **{offline_delta:+.4f}** |
 
-| Run | tail_pred_err |
-|:---:|:-------------:|
-| Live v2 (encoding: verbose) | 0.940 |
-| Live v2c (encoding: rank-order + tail count-only) | 0.778 |
-| Δ live v2c - v2 | **-0.162 (huge improvement)** |
-| Δ offline replay v2c_traj - v2_traj | **{v2c_result['tail_pred_error']-v2_result['tail_pred_error']:+.4f}** |
+{live_section}
 
-## Conclusion
+## Interpretation
 
-**Encoding change → LLM policy path change → tail_err change is 100% policy-mediated**.
-
-The direct comparison shows:
-- Offline replay diff (which pure isolates trajectory diff) ≈ live diff
-- Because retrieve_hints logic is identical between backends, all live diff comes from LLM policy path change induced by encoding format
-- This validates §Metric Definitions "Walker path variance" caveat as quantitative
-- Encoding acts as a policy input, not just as a serialization detail
-
-**Implication for paper**:
-- Section 6.3 "Encoding vs Decoding insight" holds: v2c encoding improves LLM policy quality
-- Cannot claim direct retrieval improvement from encoding alone; but coupled policy improvement is a real effect
-- Table caption footnote: "tail_err difference between v2 and v2c is mediated by walker-path variance induced by encoding change"
+The offline delta compares two trajectories under identical retrieval code. It
+quantifies trajectory sensitivity, but it does not alone prove what fraction of
+any live-run difference was caused by the encoding change.
 """
     with open(os.path.join(args.out_dir, "isolate_analysis.md"), "w") as f:
         f.write(md)

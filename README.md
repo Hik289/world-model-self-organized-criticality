@@ -54,6 +54,7 @@ The repository studies whether LLM-agent world models exhibit self-organized cri
 ```text
 world-model-self-organized-criticality/
 ├── assets/figures/              # PNG figures used in the README and paper
+├── data/toy_graph.json          # Tracked fixture for the sanity script
 ├── scripts/                     # Reproducible entry points
 │   ├── run_random_walk_scaling.py
 │   ├── run_llm_policy.py
@@ -69,6 +70,7 @@ world-model-self-organized-criticality/
 │   ├── env/                     # Synthetic graph world
 │   ├── memory/                  # Memory backends and reservoir utilities
 │   └── pipeline/                # LLM world-model pipeline modules
+├── tests/                       # Offline regression tests
 ├── requirements.txt
 ├── pyproject.toml
 ├── CITATION.cff
@@ -78,7 +80,7 @@ world-model-self-organized-criticality/
 ## Installation
 
 ```bash
-git clone git@github.com:Hik289/world-model-self-organized-criticality.git
+git clone https://github.com/Hik289/world-model-self-organized-criticality.git
 cd world-model-self-organized-criticality
 python -m venv .venv
 source .venv/bin/activate
@@ -94,13 +96,16 @@ pip install -e ".[alfworld]"
 
 ## API Configuration
 
-LLM-based scripts use a general OpenAI-compatible chat-completions endpoint. Set:
+LLM-based scripts use an OpenAI-compatible chat-completions endpoint. For the
+OpenAI API, set:
 
 ```bash
-export LLM_API_BASE_URL="https://YOUR_LLM_API_BASE_URL/v1"
 export LLM_API_KEY="your-api-key"
 export LLM_MODEL="gpt-4o-mini"
 ```
+
+Set `LLM_API_BASE_URL` when using another compatible provider. The standard
+`OPENAI_API_KEY` variable is also accepted.
 
 Alternatively, place the key at `.secrets/llm.key` and keep `.secrets/` untracked:
 
@@ -109,7 +114,9 @@ mkdir -p .secrets
 printf '%s\n' "your-api-key" > .secrets/llm.key
 ```
 
-The legacy `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_DEPLOYMENT`, and `.secrets/azure.key` settings are still accepted for existing local setups.
+The legacy `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`,
+`AZURE_OPENAI_DEPLOYMENT`, and `.secrets/azure.key` settings are accepted for
+existing Azure OpenAI v1 setups.
 
 ## Quick Start
 
@@ -171,6 +178,7 @@ python scripts/run_tau_sweep.py \
 | `scripts/run_topology_control.py` | Run LLM-policy controls on non-scale-free graph families. |
 | `scripts/run_seed_ci.py` | Compute seed confidence intervals for graph memory and CTWM. |
 | `scripts/run_frozen_replay.py` | Replay frozen trajectories to separate encoding effects from path variance. |
+| `scripts/run_sanity.py` | Run the API-backed five-state end-to-end pipeline check. |
 | `scripts/run_alfworld.py` | External-validity run on ALFWorld tasks. |
 
 ## Expected Artifacts
@@ -181,7 +189,7 @@ Each run writes JSON/JSONL artifacts under the requested `--out_dir`, typically:
 - `*_state_counts.json`: state visitation frequency counts.
 - `*_trans_counts.json`: transition frequency counts.
 - `*_mem_time.jsonl`: temporal memory-access sidecar for PSD analysis.
-- `*_actions.jsonl`: LLM policy audit trail.
+- `*_actions.jsonl`: Per-step LLM policy action log.
 - `*_meta.json`: summary statistics, token accounting, and distribution-fit fields.
 
 ## Key Results Reported in the Paper

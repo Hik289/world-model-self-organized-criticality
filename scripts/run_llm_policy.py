@@ -1,7 +1,7 @@
 """
 LLM policy study — intervene on the random-walk policy with an LLM walker.
 
-Cleanroom setup (only policy differs from the scale-free random-walk setting):
+Controlled setup (only the policy differs from the random-walk setting):
 - graph: scale_free |V|=100 seed=42
 - memory: v2 StateAwareReservoirMemory (sort-by-freq + top_k=3, M=200)
 - N: 由 sanity 决定, target ≥5000
@@ -35,7 +35,6 @@ per-step 记录:
 from __future__ import annotations
 
 import argparse
-import datetime as dt
 import json
 import os
 import random
@@ -53,7 +52,11 @@ from scipy import stats as spstats
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from worldmodelsoc.memory.reservoir import StateAwareReservoirMemory  # noqa: E402
-from worldmodelsoc.env.synthetic_graph_world import build_graph, build_state_payloads  # noqa: E402
+from worldmodelsoc.env.synthetic_graph_world import (  # noqa: E402
+    build_graph,
+    build_state_payloads,
+    describe_action_options,
+)
 from worldmodelsoc.llm_config import LLM_API_BASE_URL, LLM_MODEL, make_openai_client  # noqa: E402
 
 
@@ -132,11 +135,14 @@ def llm_pick_action(
     client: OpenAI,
     current_sid: str,
     entities: List[str],
+    constraints: List[str],
+    action_options: List[str],
     actions: List[str],
     neighbors: List[int],
     recent_states: List[str],
     memory_hints: List[Dict[str, Any]],
     accountant: CostAccountant,
+    fallback_rng: random.Random,
     max_completion_tokens: int = 60,
     retries: int = 2,
 ) -> Tuple[int, bool]:
@@ -160,7 +166,9 @@ def llm_pick_action(
     )
     user_msg = (
         f"current_state: {current_sid}\n"
-        f"actions: {actions}\n"
+        f"entities: {entities}\n"
+        f"constraints: {constraints}\n"
+        f"action_options: {action_options}\n"
         f"n_neighbors: {len(neighbors)}\n"
         f"recent_states: {recent_text}"
         f"{hints_text}\n"
@@ -192,7 +200,7 @@ def llm_pick_action(
     accountant.fallback_count += 1
     accountant.error_count += 1
     accountant.last_error = str(last_err)[:200] if last_err else None
-    return random.Random().randrange(n_actions), False
+    return fallback_rng.randrange(n_actions), False
 
 
 # ==============================================================================
@@ -219,7 +227,11 @@ def summary_stats(freqs: List[int]) -> Dict[str, float]:
     med = float(np.median(arr))
     top1 = int(arr[0])
     mx_med = (float(arr[0]) / med) if med > 0 else float("inf")
-    skew = float(spstats.skew(arr)) if arr.size > 1 else 0.0
+    skew = (
+        float(spstats.skew(arr))
+        if arr.size > 1 and np.ptp(arr) > 0
+        else 0.0
+    )
     g = float(gini(arr))
     top10n = max(1, int(np.ceil(arr.size * 0.1)))
     top10_share = float(arr[:top10n].sum()) / max(1, total)
@@ -249,11 +261,10 @@ def fit_lognormal_ks(freqs: List[int]) -> Dict[str, float]:
 
 def pilot_pl_lrt(freqs: List[int], x_min: int = 1) -> Dict[str, Any]:
     """
-    简化 Clauset PL vs lognormal LRT (pilot 用, n_boot=100).
-    正式 n_boot=200 让 data_scientist 做, 这里给 quick indication.
+    Exploratory continuous power-law versus log-normal likelihood comparison.
 
-    返回 (log_lik_pl, log_lik_lognormal, LR, p_two_sided).
-    使用 Clauset et al. Section 4/5 的 alpha_hat MLE for discrete/continuous PL.
+    This lightweight diagnostic uses a Vuong-style normalized likelihood ratio
+    and does not perform a bootstrap. Paper-scale fits use ``powerlaw``.
     """
     arr = np.array(freqs, dtype=np.float64)
     arr = arr[arr >= x_min]
@@ -263,7 +274,10 @@ def pilot_pl_lrt(freqs: List[int], x_min: int = 1) -> Dict[str, Any]:
 
     # Continuous MLE for PL: alpha = 1 + n * (sum log(x_i / x_min))^{-1}
     log_ratios = np.log(arr / x_min)
-    alpha = 1.0 + n / np.sum(log_ratios)
+    denominator = np.sum(log_ratios)
+    if denominator <= 0:
+        return {"n": n, "note": "no variation above x_min"}
+    alpha = 1.0 + n / denominator
     if alpha <= 1.0:
         return {"n": n, "note": f"alpha_hat={alpha:.3f} invalid"}
 
@@ -276,7 +290,7 @@ def pilot_pl_lrt(freqs: List[int], x_min: int = 1) -> Dict[str, Any]:
     sigma = log_arr.std(ddof=1)
     if sigma <= 0:
         return {"n": n, "alpha_hat": alpha, "ll_pl": ll_pl, "note": "sigma=0"}
-    # continuous truncated at x_min lognormal (approx, 忽略截断修正, pilot 足够)
+    # Exploratory approximation: the log-normal truncation correction is omitted.
     ll_ln = np.sum(spstats.lognorm.logpdf(arr, s=sigma, scale=np.exp(mu)))
 
     # Vuong-style normalized LR (Clauset eq 8-9)
@@ -366,13 +380,15 @@ def run_llm_policy(
         actions = action_cache[current]
         n_acts = len(actions)
 
-        # retrieve memory hints first (与 v2 cleanroom 一致的 retrieve 位置)
+        # Retrieve memory before choosing the next action.
         hints = mem.retrieve(current_state=sid, k=top_k_retrieve, step=step)
 
         # LLM 选 action idx
         picked_idx, is_llm = llm_pick_action(
-            client, sid, payloads[current].entities, actions,
-            neighbors, recent_states, hints, accountant,
+            client, sid, payloads[current].entities,
+            payloads[current].constraints,
+            describe_action_options(g, payloads, current), actions,
+            neighbors, recent_states, hints, accountant, rng_fallback,
         )
         # Convert action idx to next_node (与 v2 一致: walker 用 rng 均匀选 neighbor).
         # 但 policy 主动的 action idx 应影响 neighbor 选择 → 我们让 action idx 决定 neighbor sub-index.
@@ -482,14 +498,14 @@ def run_llm_policy(
         entropy = 0.0; same_prev = 0.0; llm_pick_rate = 0.0
 
     meta = {
-        "hypothesis": "H0.llm_policy_pilot",
+        "study": "llm_policy_memory_access",
         "graph_type": graph_type, "n_nodes": n_nodes, "seed": seed,
         "target_n_steps": n_steps, "actual_steps": actual_steps,
         "stopped_reason": stopped_reason,
         "reservoir_capacity": reservoir_capacity, "top_k_retrieve": top_k_retrieve,
         "elapsed_sec": time.time() - t0,
         "policy": {
-            "type": "gpt-5.4-mini_llm_policy",
+            "type": "llm_policy",
             "model": LLM_MODEL,
             "endpoint": LLM_API_BASE_URL,
             "llm_pick_rate": llm_pick_rate,

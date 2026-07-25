@@ -1,7 +1,7 @@
 """
-7 模块 API pipeline for H0.anchor_2 sanity。
+Seven-module API pipeline used by the toy sanity check.
 
-模块列表 (对应 idea.md §5.2 + World_Models_Are_Heavy_Tailed_Systems.md §3):
+Modules:
   1. State Extractor         — 从 observation 抽 canonical state_id
   2. Transition Extractor    — 从 (prev_state, action, obs) 抽 canonical transition
   3. Memory Writer           — 把 state / transition 写入 KV memory
@@ -15,8 +15,8 @@ LLM calls use an OpenAI-compatible chat-completions endpoint.
 
 from __future__ import annotations
 
-import hashlib
 import json
+import math
 import re
 import time
 from dataclasses import dataclass, field
@@ -50,6 +50,10 @@ def _chat(client: OpenAI, system: str, user: str, acc: TokenAccumulator,
     """
     单次 chat completion, 累积 token 到 acc。
     """
+    if max_completion_tokens < 1:
+        raise ValueError("max_completion_tokens must be at least 1")
+    if retries < 1:
+        raise ValueError("retries must be at least 1")
     last_err: Exception | None = None
     for i in range(retries):
         try:
@@ -87,13 +91,13 @@ def _extract_json_object(text: str) -> Dict[str, Any]:
     candidate = m.group(0)
     try:
         return json.loads(candidate)
-    except Exception:
+    except json.JSONDecodeError:
         pass
     # 尝试逐段修剪
     for end in range(len(candidate), 0, -1):
         try:
             return json.loads(candidate[:end])
-        except Exception:
+        except json.JSONDecodeError:
             continue
     return {}
 
@@ -121,7 +125,8 @@ def state_extractor(client: OpenAI, observation: str,
     )
     raw = _chat(client, system, user, acc, max_completion_tokens=1500)
     obj = _extract_json_object(raw)
-    sid = obj.get("state_id", "").strip()
+    sid_value = obj.get("state_id", "")
+    sid = sid_value.strip() if isinstance(sid_value, str) else ""
     # fallback: 简单关键词匹配
     if sid not in canonical_state_ids:
         lower_obs = observation.lower()
@@ -150,12 +155,8 @@ def transition_extractor(client: OpenAI, prev_state: str, action: str, next_stat
         "Set plausible=true if the transition looks physically/logically consistent with a house-navigation setup."
     )
     user = f"prev_state={prev_state}, action={action}, next_state={next_state}"
-    raw = _chat(client, system, user, acc, max_completion_tokens=1500)
-    obj = _extract_json_object(raw)
-    tid = obj.get("transition_id") or f"{prev_state}::{action}::{next_state}"
-    # 强制 canonical id
-    tid = f"{prev_state}::{action}::{next_state}"
-    return tid
+    _chat(client, system, user, acc, max_completion_tokens=1500)
+    return f"{prev_state}::{action}::{next_state}"
 
 
 # ==============================================================================
@@ -258,8 +259,14 @@ def next_state_predictor(client: OpenAI, prev_state: str, action: str,
     )
     raw = _chat(client, system, user, acc, max_completion_tokens=1500)
     obj = _extract_json_object(raw)
-    pred = obj.get("predicted_state_id", "")
-    conf = float(obj.get("confidence", 0.5))
+    pred_value = obj.get("predicted_state_id", "")
+    pred = pred_value if isinstance(pred_value, str) else ""
+    try:
+        conf = float(obj.get("confidence", 0.5))
+    except (TypeError, ValueError):
+        conf = 0.5
+    if not math.isfinite(conf):
+        conf = 0.5
     conf = max(0.0, min(1.0, conf))
     if pred not in canonical_state_ids:
         pred = "unknown"

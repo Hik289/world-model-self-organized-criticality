@@ -24,7 +24,6 @@ Random-walk scaling study — 6 graph families × 3 sizes × 3 seeds.
 from __future__ import annotations
 
 import argparse
-import datetime as dt
 import json
 import os
 import random
@@ -43,7 +42,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from worldmodelsoc.memory.reservoir import StateAwareReservoirMemory  # noqa: E402
 from worldmodelsoc.env.synthetic_graph_world import (  # noqa: E402
-    build_graph, build_state_payloads, GRAPH_TYPES as MAIN_GRAPH_TYPES,
+    action_index_for_neighbor,
+    build_graph,
+    build_state_payloads,
+    GRAPH_TYPES as MAIN_GRAPH_TYPES,
 )
 
 
@@ -61,6 +63,10 @@ class SymmetricPayload:
 
 
 def build_baseline_graph(n_nodes: int, seed: int, k_deg: int = 6) -> nx.DiGraph:
+    if n_nodes < 2:
+        raise ValueError("n_nodes must be at least 2")
+    if not 0 < k_deg < n_nodes:
+        raise ValueError("k_deg must be between 1 and n_nodes - 1")
     if (k_deg * n_nodes) % 2 != 0:
         k_deg += 1
     g_und = nx.random_regular_graph(k_deg, n_nodes, seed=seed)
@@ -87,7 +93,7 @@ def build_graph_and_payloads(graph_type: str, n_nodes: int, seed: int):
     if graph_type == "baseline_symmetric":
         g = build_baseline_graph(n_nodes, seed=seed)
         proto = SymmetricPayload()
-        payloads = {i: proto for i in range(n_nodes)}
+        payloads = dict.fromkeys(range(n_nodes), proto)
     else:
         g = build_graph(graph_type, n_nodes, seed=seed)
         payloads = build_state_payloads(g, seed=seed)
@@ -118,7 +124,11 @@ def summary_stats(freqs: List[int]) -> Dict[str, float]:
     med = float(np.median(arr))
     top1 = int(arr[0])
     mx_med = (float(arr[0]) / med) if med > 0 else float("inf")
-    skew = float(spstats.skew(arr)) if arr.size > 1 else 0.0
+    skew = (
+        float(spstats.skew(arr))
+        if arr.size > 1 and np.ptp(arr) > 0
+        else 0.0
+    )
     g = float(gini(arr))
     top10n = max(1, int(np.ceil(arr.size * 0.1)))
     top10_share = float(arr[:top10n].sum()) / max(1, total)
@@ -180,8 +190,13 @@ def run_one(graph_type: str, n_nodes: int, seed: int, n_steps: int,
         if step + 1 < n_steps:
             neighbors = neighbors_cache[current]
             actions = action_cache[current]
-            action = rng_walk.choice(actions)
             nxt_node = rng_walk.choice(neighbors)
+            action_idx = action_index_for_neighbor(
+                neighbors,
+                len(actions),
+                nxt_node,
+            )
+            action = actions[action_idx]
             nxt_sid = f"v_{nxt_node:04d}"
             tid = f"{sid}::{action}::{nxt_sid}"
 

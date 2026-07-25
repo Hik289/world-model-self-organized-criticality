@@ -1,23 +1,20 @@
-"""
-Exp6 τ scan — LLM policy version (P3).
-Cleanroom vs seed=42 LLM policy pilot; single τ per run for parallel launch.
-"""
+"""Run one point of the CTWM tail-coefficient sweep."""
 
 from __future__ import annotations
-import argparse, datetime as dt, json, os, random, re, sys, time
+import argparse, json, os, random, re, sys, time
 from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-import powerlaw
-from openai import OpenAI
-from scipy import stats as spstats
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from worldmodelsoc.memory.reservoir import TauReservoirMemory, summary_stats, pl_fit  # noqa: E402
-from worldmodelsoc.env.synthetic_graph_world import build_graph, build_state_payloads  # noqa: E402
+from worldmodelsoc.env.synthetic_graph_world import (  # noqa: E402
+    build_graph,
+    build_state_payloads,
+    describe_action_options,
+)
 from worldmodelsoc.llm_config import LLM_MODEL, make_openai_client  # noqa: E402
 
 PRICE_PROMPT_PER_1M = 0.15
@@ -49,7 +46,8 @@ def _extract_action_idx(text, n_actions):
         obj = json.loads(candidate)
         idx = int(obj.get("action_idx", -1))
         if 0 <= idx < n_actions: return idx
-    except Exception: pass
+    except (json.JSONDecodeError, TypeError, ValueError):
+        pass
     nums = re.findall(r"\d+", text)
     for n in nums:
         i = int(n)
@@ -57,8 +55,9 @@ def _extract_action_idx(text, n_actions):
     return None
 
 
-def llm_pick_action(client, current_sid, entities, actions, neighbors,
-                    recent_states, memory_hints, accountant,
+def llm_pick_action(client, current_sid, entities, constraints,
+                    action_options, actions, neighbors,
+                    recent_states, memory_hints, accountant, fallback_rng,
                     max_completion_tokens=60, retries=2):
     n_actions = len(actions)
     hints_text = ""
@@ -70,7 +69,9 @@ def llm_pick_action(client, current_sid, entities, actions, neighbors,
     system_msg = ("You are a walker choosing the next action in a text world. "
                   "Reply with ONLY: {\"action_idx\": <int>} where int is 0..n_actions-1. "
                   "No explanation.")
-    user_msg = (f"current_state: {current_sid}\nactions: {actions}\n"
+    user_msg = (f"current_state: {current_sid}\n"
+                f"entities: {entities}\nconstraints: {constraints}\n"
+                f"action_options: {action_options}\n"
                 f"n_neighbors: {len(neighbors)}\nrecent_states: {recent_text}"
                 f"{hints_text}\nChoose one action index (0..{n_actions-1}).")
 
@@ -95,7 +96,7 @@ def llm_pick_action(client, current_sid, entities, actions, neighbors,
     accountant.fallback_count += 1
     accountant.error_count += 1
     accountant.last_error = str(last_err)[:200] if last_err else None
-    return random.Random().randrange(n_actions), False
+    return fallback_rng.randrange(n_actions), False
 
 
 def run_one_tau_llm(tau, n_nodes, n_steps, seed, reservoir_capacity, K_pool, M_pass,
@@ -105,6 +106,7 @@ def run_one_tau_llm(tau, n_nodes, n_steps, seed, reservoir_capacity, K_pool, M_p
     payloads = build_state_payloads(g, seed=seed)
     rng_walk = random.Random(seed + 100)
     rng_mem = random.Random(seed + 200 + int(tau * 1000))
+    rng_fallback = random.Random(seed + 300)
     neighbors_cache = {n: list(g.successors(n)) for n in g.nodes()}
     action_cache = {n: payloads[n].actions for n in g.nodes()}
 
@@ -132,8 +134,10 @@ def run_one_tau_llm(tau, n_nodes, n_steps, seed, reservoir_capacity, K_pool, M_p
             mem_time_records.append((step, ev["memory_id"], ev["access_kind"], ev.get("retrieval_rank", -1)))
 
         picked_idx, is_llm = llm_pick_action(
-            client, sid, payloads[current].entities, actions,
-            neighbors, recent_states, hints, accountant)
+            client, sid, payloads[current].entities,
+            payloads[current].constraints,
+            describe_action_options(g, payloads, current), actions,
+            neighbors, recent_states, hints, accountant, rng_fallback)
         n_acts = len(actions)
         if len(neighbors) == 0:
             nxt_node = current
@@ -203,7 +207,8 @@ def run_one_tau_llm(tau, n_nodes, n_steps, seed, reservoir_capacity, K_pool, M_p
                   "tokens_completion": accountant.tokens_completion,
                   "api_calls": accountant.api_calls,
                   "estimated_usd": accountant.estimated_usd()},
-        "policy": {"type": "gpt-5.4-mini_llm_policy", "llm_pick_rate": llm_pick_rate,
+        "policy": {"type": "llm_policy", "model": LLM_MODEL,
+                    "llm_pick_rate": llm_pick_rate,
                     "fallback_count": accountant.fallback_count,
                     "error_count": accountant.error_count,
                     "action_entropy_bits": entropy, "same_as_prev_step_rate": same_prev,

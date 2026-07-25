@@ -1,35 +1,26 @@
-"""
-CTWM comparison — compact core/tail encoding with true prompt concatenation.
+"""Compare compact CTWM encoding with seven memory baselines.
 
-Cleanroom: scale_free |V|=100 seed=42 LLM policy (gpt-5.4-mini).
-- 8 methods each: N=2000 (B1: N=500)
-- context 真正拼入 LLM prompt
-- tokens_actual = chat-completion usage.prompt_tokens sum / N
-- tokens_estimator (旧) 也报作双数
-- Schema envelope v0.1.1 for mem_time/actions sidecar
-
-Verifier ml_engineer_gpt audit points:
-- B7 AriGraph episodic+semantic dual-layer (spec approved by Director)
-- B8 CTWM 5-feature Core score, ũ=0.5 const (v1 limitation), θ_c=top-30% percentile,
-  Core 3/Tail 2 with b(r;τ=1.0), cluster summary for similar tail entries
-- B1 Full History: 全轨迹 concat, N=500
-- B4/B5: fixed capacity M=100, min-freq/oldest-recency 严格 evict
+Memory context is included in every policy prompt. Outputs contain both
+provider-reported prompt tokens and the legacy token estimator.
 """
 
 from __future__ import annotations
 import argparse, datetime as dt, json, os, random, re, sys, time
 from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List
 
 import numpy as np
 import powerlaw
-from openai import OpenAI
 from scipy import stats as spstats
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
-from worldmodelsoc.env.synthetic_graph_world import build_graph, build_state_payloads  # noqa: E402
+from worldmodelsoc.env.synthetic_graph_world import (  # noqa: E402
+    build_graph,
+    build_state_payloads,
+    describe_action_options,
+)
 from worldmodelsoc.memory.backends_ctwm import (  # noqa: E402
     B1_FullHistory, B2_SlidingWindow, B3_FlatRetrieval, B4_FrequencyCache,
     B5_RecencyCache, B6_HierarchicalSummary, B7_GraphMemory, B8_CTWM,
@@ -47,6 +38,8 @@ def make_client():
 
 class CostAccountant:
     def __init__(self, budget_usd=0.5):
+        if budget_usd <= 0:
+            raise ValueError("budget_usd must be positive")
         self.tokens_prompt = 0; self.tokens_completion = 0; self.api_calls = 0
         self.fallback_count = 0; self.budget_usd = budget_usd
         self.error_count = 0; self.last_error = None
@@ -68,7 +61,8 @@ def _extract_action_idx(text, n_actions):
         obj = json.loads(candidate)
         idx = int(obj.get("action_idx", -1))
         if 0 <= idx < n_actions: return idx
-    except Exception: pass
+    except (json.JSONDecodeError, TypeError, ValueError):
+        pass
     nums = re.findall(r"\d+", text)
     for n in nums:
         i = int(n)
@@ -77,7 +71,8 @@ def _extract_action_idx(text, n_actions):
 
 
 def llm_pick_action(client, current_sid, actions, neighbors, recent_states,
-                    memory_context_str, accountant,
+                    memory_context_str, accountant, fallback_rng,
+                    state_context="", action_options=None,
                     max_completion_tokens=60, retries=2):
     n_actions = len(actions)
     recent_text = ", ".join(recent_states[-5:]) if recent_states else "(none)"
@@ -85,8 +80,10 @@ def llm_pick_action(client, current_sid, actions, neighbors, recent_states,
                   "Reply with ONLY: {\"action_idx\": <int>} where int is 0..n_actions-1. "
                   "No explanation.")
     # Real memory context concat here
+    options = action_options or actions
     user_msg = (f"current_state: {current_sid}\n"
-                f"actions: {actions}\n"
+                f"state_payload: {state_context or '(not provided)'}\n"
+                f"action_options: {options}\n"
                 f"n_neighbors: {len(neighbors)}\n"
                 f"recent_states: {recent_text}\n"
                 f"memory: {memory_context_str}\n"
@@ -113,18 +110,25 @@ def llm_pick_action(client, current_sid, actions, neighbors, recent_states,
     accountant.fallback_count += 1
     accountant.error_count += 1
     accountant.last_error = str(last_err)[:200] if last_err else None
-    return random.Random().randrange(n_actions), False
+    return fallback_rng.randrange(n_actions), False
 
 
-def build_backend(name: str, tau: float = 1.0):
+def build_backend(name: str, tau: float = 1.0, seed: int = 42):
     if name == "B1_FullHistory":       return B1_FullHistory()
     if name == "B2_SlidingWindow":     return B2_SlidingWindow(K=100)
-    if name == "B3_FlatRetrieval":     return B3_FlatRetrieval(top_k=3)
+    if name == "B3_FlatRetrieval":     return B3_FlatRetrieval(top_k=3, seed=seed)
     if name == "B4_FrequencyCache":    return B4_FrequencyCache(capacity=100, top_k=3)
     if name == "B5_RecencyCache":      return B5_RecencyCache(capacity=100, top_k=3)
     if name == "B6_HierarchicalSummary": return B6_HierarchicalSummary(chunk=100)
     if name == "B7_GraphMemory":       return B7_GraphMemory(episode_length=100, top_k=3)
-    if name == "B8_CTWM":              return B8_CTWM(tau=tau, core_pct=0.30, core_slots=3, tail_slots=2)
+    if name == "B8_CTWM":
+        return B8_CTWM(
+            tau=tau,
+            core_pct=0.30,
+            core_slots=3,
+            tail_slots=2,
+            seed=seed,
+        )
     raise ValueError(f"unknown: {name}")
 
 
@@ -136,12 +140,13 @@ def run_method(method_name, n_nodes, n_steps, seed, budget_usd, tau, out_dir):
     payloads = build_state_payloads(g, seed=seed)
 
     rng_walk = random.Random(seed + 100)
+    rng_fallback = random.Random(seed + 300)
     neighbors_cache = {n: list(g.successors(n)) for n in g.nodes()}
     action_cache = {n: payloads[n].actions for n in g.nodes()}
 
     client = make_client()
     accountant = CostAccountant(budget_usd=budget_usd)
-    mem = build_backend(method_name, tau=tau)
+    mem = build_backend(method_name, tau=tau, seed=seed)
     uses_entities = isinstance(mem, B7_GraphMemory)
 
     walker_states: set = set()
@@ -204,7 +209,14 @@ def run_method(method_name, n_nodes, n_steps, seed, budget_usd, tau, out_dir):
         neighbors = neighbors_cache[current]
         n_prompt_before = accountant.tokens_prompt
         picked_idx, is_llm = llm_pick_action(
-            client, sid, actions, neighbors, recent_states, ctx_str, accountant)
+            client, sid, actions, neighbors, recent_states, ctx_str,
+            accountant, rng_fallback,
+            state_context=(
+                f"entities={payloads[current].entities}; "
+                f"constraints={payloads[current].constraints}"
+            ),
+            action_options=describe_action_options(g, payloads, current),
+        )
         n_prompt_delta = accountant.tokens_prompt - n_prompt_before
         per_step_prompt_tokens.append(n_prompt_delta)
 
@@ -235,7 +247,7 @@ def run_method(method_name, n_nodes, n_steps, seed, budget_usd, tau, out_dir):
             "schema_version": "0.1.1", "run_id": run_id,
             "event_type": "memory_access", "event_seq": len(mem_time_records),
             "agent_step": step,
-            "memory_id": f"tx_{tid}", "access_kind": "write",
+            "memory_id": tid, "access_kind": "write",
         })
 
         # Prediction check: top-1 hint next matches actual?
@@ -280,7 +292,7 @@ def run_method(method_name, n_nodes, n_steps, seed, budget_usd, tau, out_dir):
     state_visits = Counter(per_step_state)
     sorted_by_v = sorted(state_visits.items(), key=lambda x: x[1])
     n_tail = max(1, int(len(sorted_by_v) * 0.5))
-    tail_states = set(s for s, _ in sorted_by_v[:n_tail])
+    tail_states = {state for state, _count in sorted_by_v[:n_tail]}
     tail_correct = []
     for i in range(len(per_step_state) - 1):
         if per_step_state[i + 1] in tail_states and i < len(per_step_action_correct):
@@ -297,7 +309,11 @@ def run_method(method_name, n_nodes, n_steps, seed, budget_usd, tau, out_dir):
         cum = np.cumsum(x)
         return (n + 1 - 2 * np.sum(cum) / cum[-1]) / n
     gi = _g(mem_arr) if mem_arr.size else 0.0
-    skew = float(spstats.skew(mem_arr)) if mem_arr.size > 1 else 0.0
+    skew = (
+        float(spstats.skew(mem_arr))
+        if mem_arr.size > 1 and np.ptp(mem_arr) > 0
+        else 0.0
+    )
 
     # Bucket analysis (5 buckets of ~400 steps) for tokens_actual + ctx_chars
     n_avail = len(per_step_prompt_tokens)
@@ -321,10 +337,14 @@ def run_method(method_name, n_nodes, n_steps, seed, budget_usd, tau, out_dir):
     fit_info = {}
     if mem_arr.size >= 30:
         try:
-            fit = powerlaw.Fit(mem_arr, discrete=False, verbose=False)
+            fit = powerlaw.Fit(mem_arr, discrete=True, verbose=False)
             fit_info = {"alpha_hat": float(fit.alpha), "xmin": float(fit.xmin),
                          "alpha_sigma": float(fit.sigma)}
-        except Exception: pass
+        except Exception as exc:
+            fit_info = {
+                "error": type(exc).__name__,
+                "message": str(exc)[:200],
+            }
 
     result = {
         "method": method_name,
@@ -387,7 +407,7 @@ def main():
     parser.add_argument("--n_steps_b1", type=int, default=500)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--tau", type=float, default=1.0)
-    parser.add_argument("--budget_total", type=float, default=2.0)
+    parser.add_argument("--budget_total", type=float, default=3.0)
     parser.add_argument("--methods", type=str, nargs="+",
                          default=["B1_FullHistory", "B2_SlidingWindow",
                                   "B3_FlatRetrieval", "B4_FrequencyCache",
@@ -395,13 +415,15 @@ def main():
                                   "B7_GraphMemory", "B8_CTWM"])
     parser.add_argument("--out_dir", type=str, required=True)
     args = parser.parse_args()
+    if args.budget_total <= 0:
+        parser.error("--budget_total must be positive")
 
     os.makedirs(args.out_dir, exist_ok=True)
     all_results = []
     total_cost = 0.0
 
-    # Fixed per-method budgets (heavy backends need more, others need less).
-    # Total sums to ~$2.4 with $0.6 headroom vs args.budget_total.
+    # Per-method caps reflect the different context lengths. The defaults sum
+    # to $2.95 under the configured pricing estimate.
     method_budgets = {
         "B1_FullHistory": 0.35,      # N=500 with linear growth: ~$0.27 empirical
         "B2_SlidingWindow": 0.65,    # N=2000 with K=100 window ~1500 tokens/step: ~$0.55
@@ -415,8 +437,13 @@ def main():
     for m in args.methods:
         n_steps = args.n_steps_b1 if m == "B1_FullHistory" else args.n_steps
         method_budget = method_budgets.get(m, max(0.15, (args.budget_total - total_cost) / max(1, len(args.methods) - len(all_results))))
-        # Ensure we don't exceed total
         remaining = args.budget_total - total_cost
+        if remaining <= 0:
+            all_results.append({
+                "method": m,
+                "error": "skipped because the total budget was exhausted",
+            })
+            continue
         method_budget = min(method_budget, remaining)
         try:
             rep = run_method(m, args.n_nodes, n_steps, args.seed,
@@ -445,8 +472,16 @@ def main():
     b8_cs = get("B8_CTWM", "coverage_state")
     b7_ct = get("B7_GraphMemory", "coverage_trans")
     b8_ct = get("B8_CTWM", "coverage_trans")
-    G9_s = (b8_cs >= 0.95 * b7_cs) if b8_cs and b7_cs else None
-    G9_t = (b8_ct >= 0.95 * b7_ct) if b8_ct and b7_ct else None
+    G9_s = (
+        b8_cs >= 0.95 * b7_cs
+        if b8_cs is not None and b7_cs is not None
+        else None
+    )
+    G9_t = (
+        b8_ct >= 0.95 * b7_ct
+        if b8_ct is not None and b7_ct is not None
+        else None
+    )
 
     verdict = {
         "G6": {"pass": G6, "b8_actual": b8_a, "b7_actual": b7_a,
@@ -459,15 +494,16 @@ def main():
     }
 
     summary = {
-        "hypothesis": "H_method_1 (v2 faithful backends)",
+        "study": "compact_ctwm_comparison",
         "config": {"graph_type": "scale_free", "n_nodes": args.n_nodes,
                     "n_steps_default": args.n_steps, "n_steps_b1": args.n_steps_b1,
                     "seed": args.seed, "tau": args.tau,
                     "budget_total_usd": args.budget_total,
-                    "policy": "gpt-5.4-mini_llm_policy",
-                    "backends_faithful": True,
-                    "notes": "v2 with real prompt concat + tokens_actual from chat-completion usage",
-                    "ctwm_v1_limitations": "ũ=0.5 constant, 无 dynamic Tail expansion; see idea.md §4.7 rules 2/3/7 (future work)"},
+                    "policy": "llm_policy",
+                    "model": LLM_MODEL,
+                    "backend_version": "v2c",
+                    "notes": "Memory context is included in the policy prompt; token counts come from API usage.",
+                    "ctwm_v1_limitations": "The uncertainty feature is fixed at 0.5; dynamic tail expansion is not implemented."},
         "total_cost_usd": total_cost,
         "results": all_results,
         "G6_G7_G8_G9_verdict": verdict,
@@ -475,7 +511,7 @@ def main():
     with open(os.path.join(args.out_dir, "summary_v2c.json"), "w") as f:
         json.dump(summary, f, indent=2)
 
-    print(f"\n===== METHODS COMPARISON (v2) =====")
+    print("\n===== METHODS COMPARISON (v2) =====")
     print(f"{'method':<24}{'N':<6}{'cost$':<9}{'tok_act':<10}{'tok_est':<10}{'cov_s':<8}{'cov_t':<8}{'tail_err':<10}{'gini':<8}")
     for r in all_results:
         if "metrics" not in r: continue
@@ -484,7 +520,7 @@ def main():
               f"{m['avg_tokens_actual_per_step']:<10.1f}{m['avg_tokens_estimator_per_step']:<10.1f}"
               f"{m['coverage_state']:<8.3f}{m['coverage_trans']:<8.3f}"
               f"{m['tail_pred_error']:<10.3f}{m['mem_gini']:<8.3f}")
-    print(f"\n===== G6-G9 VERDICT (v2, tokens_actual based) =====")
+    print("\n===== G6-G9 VERDICT (v2, tokens_actual based) =====")
     for k, v in verdict.items():
         print(f"  {k}: {v}")
     print(f"\nTotal cost: ${total_cost:.3f} / ${args.budget_total:.2f}")

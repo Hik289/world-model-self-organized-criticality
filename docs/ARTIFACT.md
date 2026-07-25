@@ -18,7 +18,13 @@ Operational notes for reproducing `World Models Are Heavy-Tailed` from the publi
 Run these checks before long jobs:
 
 ```bash
+python -m unittest discover -s tests -v
 python -m compileall -q .
+```
+
+After configuring an LLM endpoint, run the API-backed pipeline check with:
+
+```bash
 python scripts/run_sanity.py
 ```
 
@@ -46,7 +52,8 @@ Main tracked entry points for paper-scale or benchmark-scale runs:
 
 ## Data And Outputs
 
-- API-backed runs should read credentials from environment variables or local `.env` files only; never commit real keys or provider-specific secrets.
+- API-backed runs read credentials from environment variables or the untracked
+  key files documented in the README; never commit real keys.
 - Record provider endpoint, model/deployment name, sampling parameters, and execution date for every API-backed table or figure.
 - Treat generated JSONL files, logs, caches, model checkpoints, and benchmark downloads as local artifacts unless explicitly tracked as fixtures.
 - For stochastic experiments, record seeds, task counts, dataset splits, and the exact git commit used for the run.

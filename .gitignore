@@ -4,6 +4,9 @@ logs/
 wandb/
 checkpoints/
 data/
+!data/
+data/*
+!data/toy_graph.json
 .secrets/
 
 __pycache__/

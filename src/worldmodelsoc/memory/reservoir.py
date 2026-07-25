@@ -46,7 +46,11 @@ def summary_stats(freqs: List[int]) -> Dict[str, float]:
         "top1": int(arr[0]),
         "median": med,
         "max_over_median": float(arr[0] / med) if med > 0 else float("inf"),
-        "skew": float(spstats.skew(arr)) if arr.size > 1 else 0.0,
+        "skew": (
+            float(spstats.skew(arr))
+            if arr.size > 1 and np.ptp(arr) > 0
+            else 0.0
+        ),
         "gini": gini(arr),
         "top10pct_share": float(arr[:top10n].sum()) / max(1, total),
         "singleton_fraction": float((arr == 1).sum()) / arr.size,
@@ -85,6 +89,8 @@ class StateAwareReservoirMemory:
     """
 
     def __init__(self, capacity: int = 200, rng: random.Random | None = None):
+        if capacity < 1:
+            raise ValueError("capacity must be at least 1")
         self.capacity = capacity
         self.rng = rng or random.Random(42)
         self.slots: Dict[str, Dict[str, Any]] = {}
@@ -128,6 +134,8 @@ class StateAwareReservoirMemory:
         return [{"memory_id": memory_id, "access_kind": access_kind, "freq": rec["freq"]}]
 
     def retrieve(self, current_state: str, k: int = 3, step: int = 0) -> List[Dict[str, Any]]:
+        if k < 0:
+            raise ValueError("k must be non-negative")
         if not self.slots:
             return []
         state_mates = [
@@ -157,6 +165,12 @@ class TauReservoirMemory(StateAwareReservoirMemory):
     def __init__(self, capacity: int = 200, rng: random.Random | None = None,
                  tau: float = 1.0, K_pool: int = 10, M_pass: int = 3):
         super().__init__(capacity=capacity, rng=rng)
+        if not math.isfinite(tau) or tau < 0:
+            raise ValueError("tau must be non-negative")
+        if K_pool < 1:
+            raise ValueError("K_pool must be at least 1")
+        if M_pass < 1:
+            raise ValueError("M_pass must be at least 1")
         self.tau = tau
         self.K_pool = K_pool
         self.M_pass = M_pass
@@ -176,16 +190,17 @@ class TauReservoirMemory(StateAwareReservoirMemory):
         weights = ranks ** (-self.tau)
         weights = weights / weights.sum()
         n_pick = min(self.M_pass, len(pool))
-        chosen = self.rng.choices(range(len(pool)), weights=weights.tolist(), k=n_pick)
+        remaining = list(range(len(pool)))
+        remaining_weights = weights.tolist()
         seen = []
-        for idx in chosen:
-            if idx not in seen:
-                seen.append(idx)
-        for idx in range(len(pool)):
-            if len(seen) >= n_pick:
-                break
-            if idx not in seen:
-                seen.append(idx)
+        for _ in range(n_pick):
+            selected = self.rng.choices(
+                range(len(remaining)),
+                weights=remaining_weights,
+                k=1,
+            )[0]
+            seen.append(remaining.pop(selected))
+            remaining_weights.pop(selected)
         events = []
         for rank, idx in enumerate(seen[:n_pick]):
             mid, rec = pool[idx]
