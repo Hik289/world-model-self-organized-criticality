@@ -9,11 +9,15 @@ Official code for **World Models Are Heavy-Tailed: Static Power-Law Emerges Unde
 
 The repository studies whether LLM-agent world models exhibit self-organized criticality (SOC) signatures in memory access. Random-walk policies produce heavy-tailed log-normal access patterns, while semantically driven LLM policies shift the memory distribution toward a truncated power law. We also include Core-Tail World Model (CTWM), a memory allocation mechanism that uses an external tail coefficient `tau` to trade off core reuse and tail coverage.
 
-## Repository Summary
+## At A Glance
 
-- **Scope.** Do world-model memory systems exhibit heavy-tailed access and failure dynamics?
-- **Method.** The project studies random-walk, LLM-policy, retriever, and Core-Tail World Model regimes under controlled comparisons.
-- **Contents.** Figures, retrieval ladders, reproduction scripts, expected artifacts, and key reported results.
+| Artifact review question | Entry point |
+| --- | --- |
+| Research question | Do world-model memory systems exhibit heavy-tailed access and failure dynamics? |
+| Core method | The project studies random-walk, LLM-policy, retriever, and Core-Tail World Model regimes under controlled comparisons. |
+| Included artifacts | Figures, retrieval ladders, reproduction scripts, expected artifacts, and key reported results. |
+| Fast validation | `python scripts/run_random_walk_scaling.py --out_dir results/quick --graph_types scale_free --n_nodes 100 --seeds 42 --n_steps 1000` |
+| Paper-scale reproduction | Random-walk, LLM-policy, CTWM, tau sweep, topology control, seed CI, replay, and ALFWorld scripts. |
 
 ## Key Contributions
 
@@ -113,10 +117,6 @@ Alternatively, place the key at `.secrets/llm.key` and keep `.secrets/` untracke
 mkdir -p .secrets
 printf '%s\n' "your-api-key" > .secrets/llm.key
 ```
-
-The legacy `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`,
-`AZURE_OPENAI_DEPLOYMENT`, and `.secrets/azure.key` settings are accepted for
-existing Azure OpenAI v1 setups.
 
 ## Quick Start
 
