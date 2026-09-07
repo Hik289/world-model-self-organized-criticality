@@ -390,10 +390,6 @@ def run_llm_policy(
             describe_action_options(g, payloads, current), actions,
             neighbors, recent_states, hints, accountant, rng_fallback,
         )
-        # Convert action idx to next_node (与 v2 一致: walker 用 rng 均匀选 neighbor).
-        # 但 policy 主动的 action idx 应影响 neighbor 选择 → 我们让 action idx 决定 neighbor sub-index.
-        # 具体: 把 neighbors 均分成 n_acts 段, action_idx 段内再 uniform (fallback 语义)。
-        # 这样保持 walker 的确定性来自 policy 决策而非 pure rng, 与 v2 语义有变化, 但为了让 LLM policy 真的影响轨迹, 必要。
         if len(neighbors) == 0:
             nxt_node = current
         else:

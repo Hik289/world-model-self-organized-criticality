@@ -136,10 +136,6 @@ def main():
     v2c_actions = load_actions(args.v2c_actions)
     print(f"[LOAD] v2 N={len(v2_actions)}, v2c N={len(v2c_actions)}")
 
-    # Replay: 2 backends × 2 trajectories = 4 combinations
-    # But since retrieve_hints is identical between v2 and v2c backends
-    # (only context_string differs, which doesn't affect tail_err), we
-    # only need 2 replays: one per trajectory
     print("\n[REPLAY] on v2 trajectory (backend logic identical to live v2c backend since retrieve_hints unchanged)")
     v2_result = replay_on_trajectory(
         v2_actions,

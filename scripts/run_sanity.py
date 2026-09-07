@@ -334,10 +334,6 @@ def run_pipeline(toy_graph: Dict[str, Any], n_steps: int, seed: int,
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2, ensure_ascii=False)
 
-    # ================================================
-    # 计算 B1-B6 assertion
-    # ================================================
-    # B1: extracted_states 与 GT 一致率 (逐步)
     n_correct_states = sum(1 for i in range(n_steps) if extracted_states[i] == gt_states[i])
     B1_rate = n_correct_states / n_steps
     B1_pass = B1_rate >= 0.9
