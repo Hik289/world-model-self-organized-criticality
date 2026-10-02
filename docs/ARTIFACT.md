@@ -1,6 +1,6 @@
 # Artifact Guide
 
-Operational notes for reproducing `World Models Are Heavy-Tailed` from the public `world-model-self-organized-criticality` repository.
+Operational notes for reproducing `Heavy-Tailed Memory Traces in Long-Horizon Language Agents` from the public `world-model-self-organized-criticality` repository.
 
 ## Review Path
 

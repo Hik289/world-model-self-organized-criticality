@@ -1,11 +1,14 @@
-# World Models Are Heavy-Tailed
+# Heavy-Tailed Memory Traces in Long-Horizon Language Agents
 
 <p align="center">
+  <a href="https://arxiv.org/abs/2610.00010"><img src="https://img.shields.io/badge/arXiv-2610.00010-b31b1b.svg" alt="arXiv:2610.00010"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="MIT license"></a>
   <a href="pyproject.toml"><img src="https://img.shields.io/badge/Python-3.10%2B-3776AB.svg" alt="Python 3.10+"></a>
 </p>
 
-Official code for **World Models Are Heavy-Tailed: Static Power-Law Emerges Under Semantically-Driven Policy**.
+Official code for **Heavy-Tailed Memory Traces in Long-Horizon Language Agents**.
+
+**Xinyuan Song · Zekun Cai**
 
 The repository studies whether LLM-agent world models exhibit self-organized criticality (SOC) signatures in memory access. Random-walk policies produce heavy-tailed log-normal access patterns, while semantically driven LLM policies shift the memory distribution toward a truncated power law. We also include Core-Tail World Model (CTWM), a memory allocation mechanism that uses an external tail coefficient `tau` to trade off core reuse and tail coverage.
 
@@ -216,12 +219,15 @@ Reproduction notes are in [docs/ARTIFACT.md](docs/ARTIFACT.md): environment file
 ## Citation
 
 ```bibtex
-@article{anonymous2026worldmodelsoc,
-  title   = {World Models Are Heavy-Tailed: Static Power-Law Emerges Under Semantically-Driven Policy},
-  author  = {Anonymous Authors},
-  journal = {Under review},
-  year    = {2026},
-  url     = {https://github.com/Hik289/world-model-self-organized-criticality}
+@misc{song2026heavytailedmemorytraces,
+  title         = {Heavy-Tailed Memory Traces in Long-Horizon Language Agents},
+  author        = {Xinyuan Song and Zekun Cai},
+  year          = {2026},
+  eprint        = {2610.00010},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.AI},
+  doi           = {10.48550/arXiv.2610.00010},
+  url           = {https://arxiv.org/abs/2610.00010}
 }
 ```
 
