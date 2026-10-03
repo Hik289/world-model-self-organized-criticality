@@ -1,19 +1,3 @@
-"""
-Synthetic graph-world generator and random-walk baseline.
-
-Environment:
-- 有向状态图 G = (V, E), |V| ∈ {100, 500, 1000}
-- 5 种图类型: uniform-degree / exponential-degree / scale-free / modular / mixed
-- 每个 state s ∈ V 携带结构化载荷:
-    - entities: 3-8 个
-    - relations: 2-6 条
-    - constraints: 1-4 个
-    - actions: 1-3 个 (每个 action 决定一个后继)
-- agent policy: random-walk baseline (从当前 state 的 outgoing edges 里 uniform 抽一个 action)
-
-This module is CPU-only and includes structural checks for generated runs.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -29,28 +13,19 @@ import networkx as nx
 import numpy as np
 
 
-# ==============================================================================
-# 图构造
-# ==============================================================================
-
 GRAPH_TYPES = [
-    "uniform_degree",       # k-regular
-    "exponential_degree",   # exponential degree distribution (configuration model)
-    "scale_free",           # Barabasi-Albert
-    "modular",              # Stochastic Block Model (community structure)
-    "mixed",                # 拼接: 一部分 SBM + 一部分 BA + 桥接边
+    "uniform_degree",
+    "exponential_degree",
+    "scale_free",
+    "modular",
+    "mixed",
 ]
 
 
 def _ensure_strongly_connected_di(g: nx.DiGraph, rng: random.Random) -> nx.DiGraph:
-    """
-    如果 DiGraph 不 strongly connected, 在 SCC 之间加桥接边使之 strongly connected。
-    保持结构不变的前提下, 保证 random walker 不会卡死。
-    """
     if nx.is_strongly_connected(g):
         return g
     sccs = list(nx.strongly_connected_components(g))
-    # 按 sccs 顺序建一个环, 保证连通
     scc_reps = []
     for scc in sccs:
         scc_list = list(scc)
@@ -66,9 +41,6 @@ def _ensure_strongly_connected_di(g: nx.DiGraph, rng: random.Random) -> nx.DiGra
 
 
 def build_graph(graph_type: str, n_nodes: int, seed: int = 42) -> nx.DiGraph:
-    """
-    根据 graph_type + n_nodes 构造有向图, 返回 strongly connected DiGraph。
-    """
     if graph_type not in GRAPH_TYPES:
         raise ValueError(f"Unknown graph_type: {graph_type}")
     if n_nodes < 6:
@@ -77,7 +49,6 @@ def build_graph(graph_type: str, n_nodes: int, seed: int = 42) -> nx.DiGraph:
     np_rng = np.random.default_rng(seed)
 
     if graph_type == "uniform_degree":
-        # 无向 k-regular, 转成有向 (双向边)
         k = 6 if n_nodes >= 20 else max(2, n_nodes // 4 * 2)
         if (k * n_nodes) % 2 != 0:
             k += 1
@@ -89,15 +60,13 @@ def build_graph(graph_type: str, n_nodes: int, seed: int = 42) -> nx.DiGraph:
             g.add_edge(v, u)
 
     elif graph_type == "exponential_degree":
-        # 指数 degree 分布, 均值 ~ 6
         target_mean = 6.0
-        # 用 configuration model, 需要 degree seq 之和为偶数
         while True:
             degs = np_rng.exponential(scale=target_mean, size=n_nodes).astype(int) + 1
             if degs.sum() % 2 == 0:
                 break
         g_und = nx.configuration_model(degs.tolist(), seed=seed)
-        g_und = nx.Graph(g_und)  # 去平行边
+        g_und = nx.Graph(g_und)
         g_und.remove_edges_from(nx.selfloop_edges(g_und))
         g = nx.DiGraph()
         g.add_nodes_from(range(n_nodes))
@@ -106,7 +75,6 @@ def build_graph(graph_type: str, n_nodes: int, seed: int = 42) -> nx.DiGraph:
             g.add_edge(v, u)
 
     elif graph_type == "scale_free":
-        # BA model, m=3
         m = min(3, max(1, n_nodes // 30))
         g_und = nx.barabasi_albert_graph(n_nodes, m, seed=seed)
         g = nx.DiGraph()
@@ -116,11 +84,10 @@ def build_graph(graph_type: str, n_nodes: int, seed: int = 42) -> nx.DiGraph:
             g.add_edge(v, u)
 
     elif graph_type == "modular":
-        # SBM, 5 个 block, block 内高连, block 间低连
         n_blocks = 5 if n_nodes >= 50 else 2
         block_size = n_nodes // n_blocks
         sizes = [block_size] * n_blocks
-        sizes[-1] += n_nodes - sum(sizes)  # 保证总数正确
+        sizes[-1] += n_nodes - sum(sizes)
         p_in = 0.15
         p_out = 0.01
         p_matrix = [[p_in if i == j else p_out for j in range(n_blocks)] for i in range(n_blocks)]
@@ -132,7 +99,6 @@ def build_graph(graph_type: str, n_nodes: int, seed: int = 42) -> nx.DiGraph:
             g.add_edge(v, u)
 
     elif graph_type == "mixed":
-        # 一半 BA + 一半 SBM, 中间加桥接
         half = n_nodes // 2
         m = min(3, max(1, half // 30))
         g_ba = nx.barabasi_albert_graph(half, m, seed=seed)
@@ -144,27 +110,22 @@ def build_graph(graph_type: str, n_nodes: int, seed: int = 42) -> nx.DiGraph:
         g_sbm = nx.stochastic_block_model(sizes, p_matrix, seed=seed + 1)
         g = nx.DiGraph()
         g.add_nodes_from(range(n_nodes))
-        # BA 边
         for u, v in g_ba.edges():
             g.add_edge(u, v)
             g.add_edge(v, u)
-        # SBM 边 (relabel 到后半段 id)
         for u, v in g_sbm.edges():
             uu = u + half
             vv = v + half
             g.add_edge(uu, vv)
             g.add_edge(vv, uu)
-        # 桥接 5 条
         for _ in range(5):
             a = rng.randrange(half)
             b = rng.randrange(half, n_nodes)
             g.add_edge(a, b)
             g.add_edge(b, a)
 
-    # 确保 strongly connected (对 random walk 至关重要)
     g = _ensure_strongly_connected_di(g, rng)
 
-    # 保证每个节点至少 1 条 out edge (随便加一条自环替代物)
     for node in list(g.nodes()):
         if g.out_degree(node) == 0:
             other = rng.choice([n for n in g.nodes() if n != node])
@@ -173,26 +134,15 @@ def build_graph(graph_type: str, n_nodes: int, seed: int = 42) -> nx.DiGraph:
     return g
 
 
-# ==============================================================================
-# 状态载荷 (entities / relations / constraints / actions)
-# ==============================================================================
-
-
 @dataclass
 class StatePayload:
-    """
-    Structured state content with bounded entity, relation, constraint, and action counts.
-    """
     entities: List[str] = field(default_factory=list)
-    relations: List[Tuple[str, str, str]] = field(default_factory=list)  # (head, rel, tail)
+    relations: List[Tuple[str, str, str]] = field(default_factory=list)
     constraints: List[str] = field(default_factory=list)
-    actions: List[str] = field(default_factory=list)  # 每个 action 名字
+    actions: List[str] = field(default_factory=list)
 
 
 def build_state_payloads(g: nx.DiGraph, seed: int = 42) -> Dict[int, StatePayload]:
-    """
-    为每个 state 生成 payload。actions 数量 = min(out_degree, 3), 但也保证至少 1 个。
-    """
     rng = random.Random(seed + 1)
     payloads: Dict[int, StatePayload] = {}
     entity_pool = [f"ent_{i}" for i in range(200)]
@@ -218,7 +168,6 @@ def build_state_payloads(g: nx.DiGraph, seed: int = 42) -> Dict[int, StatePayloa
             relations.append((h, r, t))
         n_cons = rng.randint(1, 4)
         constraints = rng.sample(constraint_pool, min(n_cons, len(constraint_pool)))
-        # actions 数量: 至少 1, 至多 3, 不超过 out_degree
         out_deg = g.out_degree(node)
         n_act = rng.randint(1, 3)
         n_act = min(n_act, max(1, out_deg))
@@ -231,7 +180,6 @@ def build_state_payloads(g: nx.DiGraph, seed: int = 42) -> Dict[int, StatePayloa
 
 
 def neighbor_segment(neighbors: List[int], n_actions: int, action_idx: int) -> List[int]:
-    """Return the neighbor group represented by one action index."""
     if n_actions < 1:
         raise ValueError("n_actions must be at least 1")
     if not 0 <= action_idx < n_actions:
@@ -252,7 +200,6 @@ def action_index_for_neighbor(
     n_actions: int,
     neighbor: int,
 ) -> int:
-    """Return the action index whose segment contains ``neighbor``."""
     if neighbor not in neighbors:
         raise ValueError("neighbor is not in the supplied neighbor list")
     for action_idx in range(n_actions):
@@ -266,7 +213,6 @@ def describe_action_options(
     payloads: Dict[int, StatePayload],
     node: int,
 ) -> List[str]:
-    """Describe each action using the payloads of its reachable neighbor group."""
     neighbors = list(g.successors(node))
     actions = payloads[node].actions
     descriptions = []
@@ -285,11 +231,6 @@ def describe_action_options(
     return descriptions
 
 
-# ==============================================================================
-# Random Walk Agent
-# ==============================================================================
-
-
 def run_random_walk(
     g: nx.DiGraph,
     payloads: Dict[int, StatePayload],
@@ -297,11 +238,6 @@ def run_random_walk(
     seed: int = 42,
     start_node: int | None = None,
 ) -> Tuple[List[int], List[Tuple[int, str, int]]]:
-    """
-    在 g 上跑 n_steps 步 random walk。返回:
-      states: 长度 n_steps 的 state 序列 (state 是 int node id)
-      transitions: 长度 n_steps-1 的 (prev, action, next) 序列
-    """
     if n_steps < 1:
         raise ValueError("n_steps must be at least 1")
     if not g:
@@ -317,14 +253,12 @@ def run_random_walk(
     states = [start_node]
     transitions: List[Tuple[int, str, int]] = []
     current = start_node
-    # 预算 out-neighbor 列表 (为 speed)
     neighbors_cache: Dict[int, List[int]] = {n: list(g.successors(n)) for n in g.nodes()}
     action_cache: Dict[int, List[str]] = {n: payloads[n].actions for n in g.nodes()}
 
     for _step in range(n_steps - 1):
         neighbors = neighbors_cache[current]
         actions = action_cache[current]
-        # Sample the next node uniformly, then record its corresponding action.
         nxt = rng.choice(neighbors)
         action_idx = action_index_for_neighbor(neighbors, len(actions), nxt)
         action = actions[action_idx]
@@ -335,34 +269,29 @@ def run_random_walk(
     return states, transitions
 
 
-# ==============================================================================
-# Assertion 检查 (A1-A5)
-# ==============================================================================
-
-
 @dataclass
 class AssertionReport:
     graph_type: str
     n_nodes: int
     n_steps: int
     seed: int
-    A1_nonzero_state_coverage: float          # 非零 state 覆盖率
-    A1_pass: bool                             # >= 0.2
-    A2_max_state_freq_ratio: float             # 最大频次 / 总步数
-    A2_pass: bool                             # <= 0.5
+    A1_nonzero_state_coverage: float
+    A1_pass: bool
+    A2_max_state_freq_ratio: float
+    A2_pass: bool
     A3_unique_transitions_count: int
-    A3_threshold: int                          # 3 * |V|
-    A3_pass: bool                             # >= 3*|V|
+    A3_threshold: int
+    A3_pass: bool
     A4_state_freq_variance: float
     A4_transition_freq_variance: float
-    A4_pass: bool                             # both > 0
+    A4_pass: bool
     A5_generation_time_sec: float
-    A5_pass: bool                              # <= 120s
+    A5_pass: bool
     all_pass: bool
-    n_singleton_states: int                    # 频次 == 1 的 state 数
-    n_singleton_transitions: int                # 频次 == 1 的 transition 数
-    top10_state_freq: List[int]                # 前 10 大 state 频次
-    top10_transition_freq: List[int]            # 前 10 大 transition 频次
+    n_singleton_states: int
+    n_singleton_transitions: int
+    top10_state_freq: List[int]
+    top10_transition_freq: List[int]
     n_unique_states_visited: int
     n_unique_transitions: int
     graph_edge_count: int
@@ -378,37 +307,31 @@ def evaluate_run(
     graph_edge_count: int,
     gen_time: float,
 ) -> AssertionReport:
-    # A1 non-zero state coverage
     unique_states = set(states)
     coverage = len(unique_states) / n_nodes
     A1_pass = coverage >= 0.2
 
-    # A2 max freq ratio
     state_counter = Counter(states)
     max_freq = max(state_counter.values()) if state_counter else 0
     max_ratio = max_freq / n_steps
     A2_pass = max_ratio <= 0.5
 
-    # A3 unique transitions
     trans_ids = [f"{u}::{a}::{v}" for (u, a, v) in transitions]
     trans_counter = Counter(trans_ids)
     n_unique_trans = len(trans_counter)
     A3_threshold = 3 * n_nodes
     A3_pass = n_unique_trans >= A3_threshold
 
-    # A4 variance
     state_freqs = np.array(list(state_counter.values()), dtype=np.int64)
     trans_freqs = np.array(list(trans_counter.values()), dtype=np.int64)
     state_var = float(state_freqs.var())
     trans_var = float(trans_freqs.var())
     A4_pass = (state_var > 0) and (trans_var > 0)
 
-    # A5 gen time
     A5_pass = gen_time <= 120.0
 
     all_pass = all([A1_pass, A2_pass, A3_pass, A4_pass, A5_pass])
 
-    # top10
     top10_state = [c for _, c in state_counter.most_common(10)]
     top10_trans = [c for _, c in trans_counter.most_common(10)]
 
@@ -443,11 +366,6 @@ def evaluate_run(
     )
 
 
-# ==============================================================================
-# Sample JSONL output
-# ==============================================================================
-
-
 def emit_sample_jsonl(
     graph_type: str,
     n_nodes: int,
@@ -461,12 +379,6 @@ def emit_sample_jsonl(
     start_time_utc: str | None = None,
     start_wallclock_ms: int = 0,
 ) -> str:
-    """
-    写一段短 JSONL (前 short_len 步), 遵循 data/log_schema.json v0.1.0。
-    Writes state, transition, token-profile, and metadata events. Memory and
-    prediction events are produced by the end-to-end pipeline.
-    返回实际 run_id。
-    """
     import datetime as dt
     if run_id is None:
         run_id = f"sgw_{graph_type}_v{n_nodes}_seed{seed}_sample"
@@ -482,7 +394,6 @@ def emit_sample_jsonl(
     trans_freq_running: Dict[str, int] = {}
 
     with open(out_path, "w", encoding="utf-8") as f:
-        # meta run_start
         rec = {
             "schema_version": "0.1.0",
             "run_id": run_id,
@@ -501,7 +412,7 @@ def emit_sample_jsonl(
 
         L = min(short_len, len(states))
         for step in range(L):
-            wc_ms = start_wallclock_ms + step * 10  # 每步 10ms 假设
+            wc_ms = start_wallclock_ms + step * 10
 
             s = states[step]
             state_freq_running[s] = state_freq_running.get(s, 0) + 1
@@ -514,7 +425,7 @@ def emit_sample_jsonl(
                 "agent_step": step,
                 "event_type": "state",
                 "event_seq": state_seq,
-                "timestamp_utc": start_time_utc,  # 简化: 用同一 ts, wallclock_ms_since_run_start 提供顺序
+                "timestamp_utc": start_time_utc,
                 "wallclock_ms_since_run_start": wc_ms,
                 "state_id": f"v_{s:04d}",
                 "state_source": "env_ground_truth",
@@ -551,7 +462,6 @@ def emit_sample_jsonl(
                 f.write(json.dumps(trans_rec) + "\n")
                 trans_seq += 1
 
-            # 每 100 步一次 token_profile
             if step % 100 == 0:
                 tok_rec = {
                     "schema_version": "0.1.0",
@@ -572,7 +482,6 @@ def emit_sample_jsonl(
                 f.write(json.dumps(tok_rec) + "\n")
                 token_seq += 1
 
-        # meta run_end
         rec = {
             "schema_version": "0.1.0",
             "run_id": run_id,
@@ -589,11 +498,6 @@ def emit_sample_jsonl(
         f.write(json.dumps(rec) + "\n")
 
     return run_id
-
-
-# ==============================================================================
-# 主入口
-# ==============================================================================
 
 
 def run_one_combo(graph_type: str, n_nodes: int, n_steps: int, seed: int,
@@ -659,7 +563,6 @@ def main():
               f"all_pass={rep.all_pass}",
               flush=True)
 
-    # 写 results.json
     results_path = os.path.join(args.out_dir, "results.json")
     out_obj = {
         "study": "synthetic_graph_world_checks",

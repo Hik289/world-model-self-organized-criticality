@@ -1,5 +1,3 @@
-"""ALFWorld external-validity study using a compact ReAct policy."""
-
 from __future__ import annotations
 import argparse, hashlib, json, os, random, re, sys, time
 from pathlib import Path
@@ -9,8 +7,8 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
-from worldmodelsoc.memory.backends_ctwm import B7_GraphMemory, B8_CTWM  # noqa: E402
-from worldmodelsoc.llm_config import LLM_MODEL, make_openai_client  # noqa: E402
+from worldmodelsoc.memory.backends_ctwm import B7_GraphMemory, B8_CTWM
+from worldmodelsoc.llm_config import LLM_MODEL, make_openai_client
 
 PRICE_PROMPT_PER_1M = 0.15
 PRICE_COMPL_PER_1M = 0.60
@@ -110,7 +108,6 @@ def build_alfredworld_config(
 
 
 def load_alfredworld_env_official(config: Dict[str, Any]):
-    """Construct the official ALFWorld text environment."""
     try:
         from alfworld.agents.environment.alfred_tw_env import AlfredTWEnv
     except ImportError as exc:

@@ -1,5 +1,3 @@
-"""Reservoir-style memory utilities shared by the experiment scripts."""
-
 from __future__ import annotations
 
 import math
@@ -61,7 +59,6 @@ def summary_stats(freqs: List[int]) -> Dict[str, float]:
 
 
 def pl_fit(freqs: List[int]) -> Dict[str, Any]:
-    """Small, dependency-light fit summary used by tau sweeps."""
     arr = np.asarray([x for x in freqs if x > 0], dtype=float)
     if arr.size < 2:
         return {"alpha_hat": None, "xmin_hat": None, "lognormal_sigma": None}
@@ -81,12 +78,6 @@ def pl_fit(freqs: List[int]) -> Dict[str, Any]:
 
 
 class StateAwareReservoirMemory:
-    """Bounded transition memory with state-aware retrieval.
-
-    The interface matches the original experiment scripts:
-    `write(...)` and `retrieve(...)` both return event dictionaries while
-    updating an access counter used for heavy-tail analysis.
-    """
 
     def __init__(self, capacity: int = 200, rng: random.Random | None = None):
         if capacity < 1:
@@ -160,7 +151,6 @@ class StateAwareReservoirMemory:
 
 
 class TauReservoirMemory(StateAwareReservoirMemory):
-    """State-aware reservoir with tau-controlled rank sampling."""
 
     def __init__(self, capacity: int = 200, rng: random.Random | None = None,
                  tau: float = 1.0, K_pool: int = 10, M_pass: int = 3):
@@ -175,7 +165,7 @@ class TauReservoirMemory(StateAwareReservoirMemory):
         self.K_pool = K_pool
         self.M_pass = M_pass
 
-    def retrieve(self, current_state: str, step: int = 0) -> List[Dict[str, Any]]:  # type: ignore[override]
+    def retrieve(self, current_state: str, step: int = 0) -> List[Dict[str, Any]]:
         if not self.slots:
             return []
         state_mates = [

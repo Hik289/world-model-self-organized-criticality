@@ -1,7 +1,3 @@
-"""
-Seed confidence intervals for CTWM and graph-memory baselines.
-"""
-
 from __future__ import annotations
 import argparse, os, sys
 from pathlib import Path
@@ -9,7 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "scripts"))
-from run_ctwm_comparison import run_method  # noqa: E402
+from run_ctwm_comparison import run_method
 
 
 def main():

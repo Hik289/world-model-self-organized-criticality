@@ -4,5 +4,3 @@ numpy>=1.24
 powerlaw>=1.4
 scipy>=1.11
 tqdm>=4.65
-# For ALFWorld experiments only:
-# alfworld>=0.3

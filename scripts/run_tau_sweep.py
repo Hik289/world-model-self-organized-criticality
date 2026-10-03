@@ -1,5 +1,3 @@
-"""Run one point of the CTWM tail-coefficient sweep."""
-
 from __future__ import annotations
 import argparse, json, os, random, re, sys, time
 from collections import Counter
@@ -9,13 +7,13 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
-from worldmodelsoc.memory.reservoir import TauReservoirMemory, summary_stats, pl_fit  # noqa: E402
-from worldmodelsoc.env.synthetic_graph_world import (  # noqa: E402
+from worldmodelsoc.memory.reservoir import TauReservoirMemory, summary_stats, pl_fit
+from worldmodelsoc.env.synthetic_graph_world import (
     build_graph,
     build_state_payloads,
     describe_action_options,
 )
-from worldmodelsoc.llm_config import LLM_MODEL, make_openai_client  # noqa: E402
+from worldmodelsoc.llm_config import LLM_MODEL, make_openai_client
 
 PRICE_PROMPT_PER_1M = 0.15
 PRICE_COMPL_PER_1M = 0.60

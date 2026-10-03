@@ -1,37 +1,3 @@
-"""
-LLM policy study — intervene on the random-walk policy with an LLM walker.
-
-Controlled setup (only the policy differs from the random-walk setting):
-- graph: scale_free |V|=100 seed=42
-- memory: v2 StateAwareReservoirMemory (sort-by-freq + top_k=3, M=200)
-- N: 由 sanity 决定, target ≥5000
-- policy: OpenAI-compatible chat endpoint (key from env or .secrets/llm.key)
-
-Prompt structure (简单, 保守 tokens):
-  system: 你是一个 walker, 给你当前 state 信息和 top-3 memory hints, 选一个 action.
-  user: current_state=v_XX (entities=..., actions=[a1, a2, ...])
-        neighbors: [v_YY -> a1, v_ZZ -> a2, ...]
-        recent_states: [v_.., v_..]  (last 5)
-        memory hints: [tx_...(freq=..), ...]
-        Choose one action index (0-based). Reply ONLY: {"action_idx": <int>}
-
-fallback: JSON 解析失败或 idx 超范围 → uniform random (记入 fallback_count)
-
-per-step 记录:
-- api_call cost (prompt+completion tokens)
-- action 是否 llm-picked or fallback
-- decision timestamp
-
-输出:
-- results/scale_free_v100_s42_llm_meta.json (含 cost tally + all summary stats)
-- results/scale_free_v100_s42_llm_mem_counts.json (memory-access counts)
-- results/scale_free_v100_s42_llm_state_counts.json
-- results/scale_free_v100_s42_llm_trans_counts.json
-- results/scale_free_v100_s42_llm_mem_time.jsonl (memory-access 时序 for PSD)
-- results/scale_free_v100_s42_llm_actions.jsonl (每步 policy 决策明细, cost audit 用)
-- results/scale_free_v100_s42_llm_{state,mem}_{first,second}_half.json
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -51,31 +17,21 @@ from scipy import stats as spstats
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
-from worldmodelsoc.memory.reservoir import StateAwareReservoirMemory  # noqa: E402
-from worldmodelsoc.env.synthetic_graph_world import (  # noqa: E402
+from worldmodelsoc.memory.reservoir import StateAwareReservoirMemory
+from worldmodelsoc.env.synthetic_graph_world import (
     build_graph,
     build_state_payloads,
     describe_action_options,
 )
-from worldmodelsoc.llm_config import LLM_API_BASE_URL, LLM_MODEL, make_openai_client  # noqa: E402
+from worldmodelsoc.llm_config import LLM_API_BASE_URL, LLM_MODEL, make_openai_client
 
 
-# ==============================================================================
-# LLM client
-# ==============================================================================
-
-# Default pricing estimate; update for the model/provider you run.
-PRICE_PROMPT_PER_1M = 0.15   # USD per 1M prompt tokens
-PRICE_COMPL_PER_1M = 0.60    # USD per 1M completion tokens
+PRICE_PROMPT_PER_1M = 0.15
+PRICE_COMPL_PER_1M = 0.60
 
 
 def make_client() -> OpenAI:
     return make_openai_client()
-
-
-# ==============================================================================
-# Cost accounting
-# ==============================================================================
 
 
 class CostAccountant:
@@ -104,13 +60,7 @@ class CostAccountant:
         return self.estimated_usd() >= self.budget_usd
 
 
-# ==============================================================================
-# LLM policy
-# ==============================================================================
-
-
 def _extract_action_idx(text: str, n_actions: int) -> Optional[int]:
-    """Parse JSON {"action_idx": <int>} out of LLM response. Return None on failure."""
     if not text:
         return None
     m = re.search(r"\{[^{}]*\}", text)
@@ -122,7 +72,6 @@ def _extract_action_idx(text: str, n_actions: int) -> Optional[int]:
             return idx
     except Exception:
         pass
-    # fallback regex: 提取数字
     nums = re.findall(r"\d+", text)
     for n in nums:
         i = int(n)
@@ -146,13 +95,7 @@ def llm_pick_action(
     max_completion_tokens: int = 60,
     retries: int = 2,
 ) -> Tuple[int, bool]:
-    """
-    Return (action_idx, is_llm_picked). fallback=uniform random over n actions if LLM fails.
-    """
-    # 构造精简 prompt (省 tokens)
     n_actions = len(actions)
-    # 关联 action -> neighbor (对齐 v2 pipeline: action idx 映射 to neighbor idx via rng in walker)
-    # 我们让 LLM 选一个 action 索引; walker 之后按 rng 从 neighbors 里挑 (与 random-walk 语义一致)
     hints_text = ""
     if memory_hints:
         hh = [f"{h['memory_id'].split('::')[-1]} (freq={h['access_freq_running']})"
@@ -196,16 +139,10 @@ def llm_pick_action(
             last_err = e
             time.sleep(1.0 * (attempt + 1))
 
-    # fallback
     accountant.fallback_count += 1
     accountant.error_count += 1
     accountant.last_error = str(last_err)[:200] if last_err else None
     return fallback_rng.randrange(n_actions), False
-
-
-# ==============================================================================
-# 统计工具
-# ==============================================================================
 
 
 def gini(x: np.ndarray) -> float:
@@ -260,19 +197,12 @@ def fit_lognormal_ks(freqs: List[int]) -> Dict[str, float]:
 
 
 def pilot_pl_lrt(freqs: List[int], x_min: int = 1) -> Dict[str, Any]:
-    """
-    Exploratory continuous power-law versus log-normal likelihood comparison.
-
-    This lightweight diagnostic uses a Vuong-style normalized likelihood ratio
-    and does not perform a bootstrap. Paper-scale fits use ``powerlaw``.
-    """
     arr = np.array(freqs, dtype=np.float64)
     arr = arr[arr >= x_min]
     n = arr.size
     if n < 20:
         return {"n": n, "note": "n<20, skip LRT"}
 
-    # Continuous MLE for PL: alpha = 1 + n * (sum log(x_i / x_min))^{-1}
     log_ratios = np.log(arr / x_min)
     denominator = np.sum(log_ratios)
     if denominator <= 0:
@@ -281,20 +211,15 @@ def pilot_pl_lrt(freqs: List[int], x_min: int = 1) -> Dict[str, Any]:
     if alpha <= 1.0:
         return {"n": n, "note": f"alpha_hat={alpha:.3f} invalid"}
 
-    # LL_PL (continuous): sum log[(alpha-1)/x_min * (x_i/x_min)^{-alpha}]
     ll_pl = n * np.log((alpha - 1.0) / x_min) - alpha * np.sum(log_ratios)
 
-    # LL_lognormal: MLE on log(arr)
     log_arr = np.log(arr)
     mu = log_arr.mean()
     sigma = log_arr.std(ddof=1)
     if sigma <= 0:
         return {"n": n, "alpha_hat": alpha, "ll_pl": ll_pl, "note": "sigma=0"}
-    # Exploratory approximation: the log-normal truncation correction is omitted.
     ll_ln = np.sum(spstats.lognorm.logpdf(arr, s=sigma, scale=np.exp(mu)))
 
-    # Vuong-style normalized LR (Clauset eq 8-9)
-    # per-point LL difference variance
     ll_pl_pts = np.log((alpha - 1.0) / x_min) - alpha * log_ratios
     ll_ln_pts = spstats.lognorm.logpdf(arr, s=sigma, scale=np.exp(mu))
     diff = ll_pl_pts - ll_ln_pts
@@ -311,11 +236,6 @@ def pilot_pl_lrt(freqs: List[int], x_min: int = 1) -> Dict[str, Any]:
         "LR": LR, "Z": float(Z), "p_two_sided": p_two,
         "interpretation": "PL better" if LR > 0 else "lognormal better",
     }
-
-
-# ==============================================================================
-# 主 run
-# ==============================================================================
 
 
 def run_llm_policy(
@@ -355,7 +275,7 @@ def run_llm_policy(
     mem_second: Counter = Counter()
 
     mem_time_records: List[Tuple[int, str, str, int]] = []
-    action_records: List[Dict[str, Any]] = []  # per-step audit
+    action_records: List[Dict[str, Any]] = []
     recent_states: List[str] = []
 
     current = rng_walk.choice(list(g.nodes()))
@@ -375,15 +295,12 @@ def run_llm_policy(
             actual_steps = step + 1
             break
 
-        # === LLM policy pick action ===
         neighbors = neighbors_cache[current]
         actions = action_cache[current]
         n_acts = len(actions)
 
-        # Retrieve memory before choosing the next action.
         hints = mem.retrieve(current_state=sid, k=top_k_retrieve, step=step)
 
-        # LLM 选 action idx
         picked_idx, is_llm = llm_pick_action(
             client, sid, payloads[current].entities,
             payloads[current].constraints,
@@ -402,7 +319,6 @@ def run_llm_policy(
         nxt_sid = f"v_{nxt_node:04d}"
         tid = f"{sid}::{action}::{nxt_sid}"
 
-        # memory write
         mid = f"tx_{tid}"
         content = f"transition {sid}--{action}-->{nxt_sid}"
         for ev in mem.write(mid, content, prev=sid, action=action, nxt=nxt_sid, step=step):
@@ -412,7 +328,6 @@ def run_llm_policy(
                 mem_second[ev["memory_id"]] += 1
             mem_time_records.append((step, ev["memory_id"], ev["access_kind"], -1))
 
-        # 补记 hints 的 access counts
         for ev in hints:
             if step < half:
                 mem_first[ev["memory_id"]] += 1
@@ -429,7 +344,6 @@ def run_llm_policy(
         current = nxt_node
         actual_steps = step + 1
 
-        # 预算检查 (每 100 步)
         if step % 100 == 99:
             used = accountant.estimated_usd()
             if step % 500 == 499:
@@ -440,7 +354,6 @@ def run_llm_policy(
                 print(f"  [BUDGET] hit ${used:.3f} >= ${budget_usd:.2f}, stopping at step {step+1}", flush=True)
                 break
 
-    # 落盘
     state_freqs = list(state_counter.values())
     trans_freqs = list(trans_counter.values())
     mem_freqs = list(mem.access_counter.values())
@@ -479,16 +392,12 @@ def run_llm_policy(
     me_shape = fit_lognormal_ks(mem_freqs)
     me_lrt = pilot_pl_lrt(mem_freqs)
 
-    # 决策多样性: action idx 相邻步的相关性 + action 序列的熵
     if action_records:
         idx_seq = [r["action_idx"] for r in action_records]
-        # entropy
         c = Counter(idx_seq)
         p = np.array(list(c.values())) / len(idx_seq)
         entropy = float(-np.sum(p * np.log2(p + 1e-12)))
-        # 与前一步 idx 相同的比例
         same_prev = float(sum(1 for i in range(1, len(idx_seq)) if idx_seq[i] == idx_seq[i-1]) / max(1, len(idx_seq) - 1))
-        # llm-picked 比例
         llm_pick_rate = float(sum(1 for r in action_records if r["is_llm_picked"]) / len(action_records))
     else:
         entropy = 0.0; same_prev = 0.0; llm_pick_rate = 0.0

@@ -1,4 +1,3 @@
-"""Topology control: run the LLM policy on non-scale-free graph families."""
 from __future__ import annotations
 import argparse, os, sys
 from pathlib import Path

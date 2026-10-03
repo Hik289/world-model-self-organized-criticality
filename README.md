@@ -33,10 +33,10 @@ The repository studies whether LLM-agent world models exhibit self-organized cri
 ## Paper Figures
 
 <p align="center">
-  <img src="assets/figures/intuition_lognormal_to_tpl.png" alt="Log-normal to TPL intuition" width="72%">
+  <img src="assets/figures/intuition_lognormal_to_tpl.png" alt="Memory-trace audit and CTWM allocation workflow" width="100%">
 </p>
 
-**Figure 1.** Intuition for the empirical transition from random-walk log-normal memory access to semantically driven truncated power-law behavior.
+**Figure 1.** Workflow from memory-trace collection and tail auditing to CTWM allocation. Random-walk and semantic policies produce traces for distributional comparison; the observed concentration motivates rank-based allocation into a compact core and summarized tail.
 
 <p align="center">
   <img src="assets/figures/pipeline_llm_policy.png" alt="LLM policy pipeline" width="72%">
@@ -51,18 +51,18 @@ The repository studies whether LLM-agent world models exhibit self-organized cri
 **Figure 3.** Retriever ladder used for controlled memory comparisons, from simple history/window baselines to graph-structured retrieval.
 
 <p align="center">
-  <img src="assets/figures/pipeline_ctwm.png" alt="CTWM pipeline" width="72%">
+  <img src="assets/figures/pipeline_ctwm.png" alt="CTWM memory controller and agent interaction workflow" width="100%">
 </p>
 
-**Figure 4.** Core-Tail World Model (CTWM): high-score core entries are retained for stable reuse, while tau-weighted tail sampling preserves rare but important transitions.
+**Figure 4.** CTWM workflow: state-aware retrieval, core–tail allocation, and prompt serialization feed a frozen LLM. Environment observations update structured memory, while a separate next-state prediction readout records prediction error alongside retrieval counts and API prompt tokens.
 
 ## Repository Structure
 
 ```text
 world-model-self-organized-criticality/
-├── assets/figures/              # PNG figures used in the README and paper
-├── data/toy_graph.json          # Tracked fixture for the sanity script
-├── scripts/                     # Reproducible entry points
+├── assets/figures/
+├── data/toy_graph.json
+├── scripts/
 │   ├── run_random_walk_scaling.py
 │   ├── run_llm_policy.py
 │   ├── run_method_comparison.py
@@ -73,11 +73,11 @@ world-model-self-organized-criticality/
 │   ├── run_frozen_replay.py
 │   ├── run_sanity.py
 │   └── run_alfworld.py
-├── src/worldmodelsoc/           # Importable package
-│   ├── env/                     # Synthetic graph world
-│   ├── memory/                  # Memory backends and reservoir utilities
-│   └── pipeline/                # LLM world-model pipeline modules
-├── tests/                       # Offline regression tests
+├── src/worldmodelsoc/
+│   ├── env/
+│   ├── memory/
+│   └── pipeline/
+├── tests/
 ├── requirements.txt
 ├── pyproject.toml
 ├── CITATION.cff

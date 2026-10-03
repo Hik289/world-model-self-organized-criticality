@@ -1,5 +1,3 @@
-"""Shared OpenAI-compatible LLM configuration."""
-
 from __future__ import annotations
 
 import os

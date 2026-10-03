@@ -1,29 +1,9 @@
-"""
-Memory backends for compact CTWM comparison.
-
-All backends implement:
-  - write_transition(prev, action, nxt, step)
-  - retrieve_hints(current_state, step) -> List[Dict]
-  - context_string(current_state) -> str      # 实际拼入 LLM prompt 的 memory context
-  - context_tokens_estimator() -> int         # 旧 estimator, 保留报双数
-  - unique_states_seen (set), unique_trans_seen (set)
-  - access_counter (Counter)
-
-Key change from v1: context_string is REAL and gets concatenated into the LLM prompt.
-tokens_actual reported from chat-completion usage.prompt_tokens sum / N.
-"""
-
 from __future__ import annotations
 import random
 from collections import Counter, deque, defaultdict
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
-
-
-# ==============================================================================
-# Base class
-# ==============================================================================
 
 
 class BaseMemory:
@@ -46,15 +26,12 @@ class BaseMemory:
         raise NotImplementedError
 
     def context_string(self, current_state) -> str:
-        """Real memory context string that gets concat'd into LLM prompt."""
         raise NotImplementedError
 
     def context_tokens_estimator(self) -> int:
-        """Legacy estimator, keep for double-reporting."""
         return 0
 
     def retained_transition_ids(self) -> set:
-        """Return transitions currently retained by the memory backend."""
         return set(self.unique_trans_seen)
 
     def retained_state_ids(self) -> set:
@@ -72,11 +49,6 @@ class BaseMemory:
         return len(self.retained_transition_ids() & walker_trans) / max(1, len(walker_trans))
 
 
-# ==============================================================================
-# B1 Full History (真正 concat 全轨迹)
-# ==============================================================================
-
-
 class B1_FullHistory(BaseMemory):
     name = "B1_FullHistory"
 
@@ -92,7 +64,6 @@ class B1_FullHistory(BaseMemory):
         self.note_state(prev); self.note_state(nxt); self.note_trans(tid)
 
     def retrieve_hints(self, current_state, step):
-        # 全历史都算 read 事件 (真的 pass 给 LLM)
         for (p, a, n) in self.history:
             tid = f"{p}::{a}::{n}"
             self.access_counter[tid] += 1
@@ -102,18 +73,11 @@ class B1_FullHistory(BaseMemory):
 
     def context_string(self, current_state) -> str:
         if not self.history: return "(empty history)"
-        # 紧凑格式: "s0->a0->s1;s1->a1->s2;..."
-        # 每 transition ~15 chars → ~4 tokens
         lines = [f"{p}->{a}->{n}" for (p, a, n) in self.history]
         return "history: " + ";".join(lines)
 
     def context_tokens_estimator(self):
         return 4 * len(self.history)
-
-
-# ==============================================================================
-# B2 Sliding Window K=100
-# ==============================================================================
 
 
 class B2_SlidingWindow(BaseMemory):
@@ -151,13 +115,7 @@ class B2_SlidingWindow(BaseMemory):
         return {f"{p}::{a}::{n}" for p, a, n in self.window}
 
 
-# ==============================================================================
-# B3 Flat Retrieval — PURE GLOBAL UNIFORM (no state-mate structure)
-# ==============================================================================
-
-
 class B3_FlatRetrieval(BaseMemory):
-    """Store all transitions and retrieve a uniform random subset."""
     name = "B3_FlatRetrieval"
 
     def __init__(self, top_k=3, seed=42, seed_offset=3):
@@ -166,7 +124,7 @@ class B3_FlatRetrieval(BaseMemory):
             raise ValueError("top_k must be at least 1")
         self.top_k = top_k
         self.rng = random.Random(seed + seed_offset)
-        self.entries: Dict[str, Dict[str, Any]] = {}  # tid -> {content, first_step}
+        self.entries: Dict[str, Dict[str, Any]] = {}
         self._last_retrieved: List[str] = []
 
     def write_transition(self, prev, action, nxt, step):
@@ -199,7 +157,6 @@ class B3_FlatRetrieval(BaseMemory):
         return "flat_retrieval: " + "; ".join(hits)
 
     def retrieve_no_side_effects(self, current_state):
-        """Return the entries selected by the most recent retrieval."""
         return list(self._last_retrieved)
 
     def context_tokens_estimator(self):
@@ -207,11 +164,6 @@ class B3_FlatRetrieval(BaseMemory):
 
     def retained_transition_ids(self):
         return set(self.entries)
-
-
-# ==============================================================================
-# B4 Frequency Cache — FIXED CAPACITY M=100, EVICT MIN-FREQ
-# ==============================================================================
 
 
 class B4_FrequencyCache(BaseMemory):
@@ -225,7 +177,6 @@ class B4_FrequencyCache(BaseMemory):
             raise ValueError("top_k must be at least 1")
         self.M = capacity
         self.top_k = top_k
-        # cache: tid -> {content, freq (in cache)}
         self.cache: Dict[str, Dict[str, Any]] = {}
 
     def write_transition(self, prev, action, nxt, step):
@@ -235,19 +186,16 @@ class B4_FrequencyCache(BaseMemory):
         elif len(self.cache) < self.M:
             self.cache[tid] = {"content": f"{prev}->{action}->{nxt}", "freq": 1}
         else:
-            # Evict min-freq
             min_tid = min(self.cache, key=lambda k: self.cache[k]["freq"])
-            if self.cache[min_tid]["freq"] <= 1:  # accept newcomer
+            if self.cache[min_tid]["freq"] <= 1:
                 del self.cache[min_tid]
                 self.cache[tid] = {"content": f"{prev}->{action}->{nxt}", "freq": 1}
-            # else newcomer rejected (rare, only when cache全部 freq >=2)
         self.access_counter[tid] += 1
         self.write_events += 1
         self.note_state(prev); self.note_state(nxt); self.note_trans(tid)
 
     def retrieve_hints(self, current_state, step):
         if not self.cache: return []
-        # top-k by freq desc
         sorted_tids = sorted(self.cache.keys(), key=lambda t: -self.cache[t]["freq"])
         picked = sorted_tids[:self.top_k]
         events = []
@@ -270,11 +218,6 @@ class B4_FrequencyCache(BaseMemory):
         return set(self.cache)
 
 
-# ==============================================================================
-# B5 Recency Cache — FIXED CAPACITY M=100, EVICT OLDEST-RECENCY (LRU)
-# ==============================================================================
-
-
 class B5_RecencyCache(BaseMemory):
     name = "B5_RecencyCache"
 
@@ -286,8 +229,7 @@ class B5_RecencyCache(BaseMemory):
             raise ValueError("top_k must be at least 1")
         self.M = capacity
         self.top_k = top_k
-        # cache: OrderedDict-like, most recent last
-        self.cache_order: deque = deque()  # tids in insertion/access order
+        self.cache_order: deque = deque()
         self.cache: Dict[str, Dict[str, Any]] = {}
         self.last_access: Dict[str, int] = {}
 
@@ -307,7 +249,6 @@ class B5_RecencyCache(BaseMemory):
             self.cache[tid] = {"content": f"{prev}->{action}->{nxt}"}
             self._touch(tid, step)
         else:
-            # Evict oldest recency (LRU)
             oldest = self.cache_order.popleft()
             del self.cache[oldest]
             del self.last_access[oldest]
@@ -319,7 +260,6 @@ class B5_RecencyCache(BaseMemory):
 
     def retrieve_hints(self, current_state, step):
         if not self.cache: return []
-        # Most recent first
         recent = list(self.cache_order)[::-1][:self.top_k]
         events = []
         for r, tid in enumerate(recent):
@@ -339,11 +279,6 @@ class B5_RecencyCache(BaseMemory):
 
     def retained_transition_ids(self):
         return set(self.cache)
-
-
-# ==============================================================================
-# B6 Hierarchical Summary — COUNT-BASED (每 100 步 summary top-5)
-# ==============================================================================
 
 
 class B6_HierarchicalSummary(BaseMemory):
@@ -382,14 +317,12 @@ class B6_HierarchicalSummary(BaseMemory):
 
     def retrieve_hints(self, current_state, step):
         hits = []
-        # summaries first (compressed layer)
         for s in reversed(self.summaries[-3:]):
             for (tid, _count) in s["top_trans"][:2]:
                 self.access_counter[tid] += 1
                 self.read_events += 1
                 hits.append({"memory_id": tid, "rank": len(hits), "layer": "summary"})
                 if len(hits) >= self.top_k_hint: return hits
-        # then recent raw
         for (p, a, n) in list(self.recent)[-3:]:
             tid = f"{p}::{a}::{n}"
             self.access_counter[tid] += 1
@@ -400,11 +333,9 @@ class B6_HierarchicalSummary(BaseMemory):
 
     def context_string(self, current_state):
         parts = []
-        # All summaries (compact: top-3 trans + counts)
         for i, s in enumerate(self.summaries):
             top_desc = ",".join([f"{tid.split('::')[-1]}(x{c})" for tid, c in s["top_trans"][:3]])
             parts.append(f"sum{i}:{top_desc}")
-        # Recent 5 raw
         recent = list(self.recent)[-5:]
         parts.append("recent:" + ";".join([f"{p}->{a}->{n}" for p, a, n in recent]))
         return " | ".join(parts) if parts else "(empty)"
@@ -422,17 +353,7 @@ class B6_HierarchicalSummary(BaseMemory):
         return retained
 
 
-# ==============================================================================
-# B7 Graph Memory — AriGraph-style (episodic + semantic 双层)
-# ==============================================================================
-
-
 class B7_GraphMemory(BaseMemory):
-    """AriGraph-style episodic + semantic dual-layer memory.
-    - Episodic: (episode_id, step, prev, action, next) 序列, episode = 100 steps
-    - Semantic: state ↔ entity bipartite graph (uses payload.entities passed at write time)
-    - Retrieval: fuse episodic (recent state-mate) + semantic (entity co-occurrence)
-    """
     name = "B7_GraphMemory"
 
     def __init__(self, episode_length=100, top_k=3):
@@ -443,28 +364,22 @@ class B7_GraphMemory(BaseMemory):
             raise ValueError("top_k must be at least 1")
         self.episode_length = episode_length
         self.top_k = top_k
-        # Episodic: list of dicts
         self.episodes: List[Dict[str, Any]] = []
         self.current_episode: Dict[str, Any] = {"episode_id": 0, "transitions": []}
-        # Semantic: state -> set of entities; entity -> set of states
         self.state_entities: Dict[str, set] = defaultdict(set)
         self.entity_states: Dict[str, set] = defaultdict(set)
-        # transition edges for coverage tracking
-        self.edges: Dict[str, Dict[str, Any]] = {}  # tid -> {prev, action, next, degree}
+        self.edges: Dict[str, Dict[str, Any]] = {}
 
     def write_transition_with_entities(self, prev, action, nxt, step, entities_prev, entities_next):
-        """Version with entity info from payload."""
         tid = f"{prev}::{action}::{nxt}"
         if tid in self.edges:
             self.edges[tid]["degree"] += 1
         else:
             self.edges[tid] = {"prev": prev, "action": action, "next": nxt, "degree": 1}
-        # episodic
         self.current_episode["transitions"].append({"step": step, "prev": prev, "action": action, "next": nxt})
         if len(self.current_episode["transitions"]) >= self.episode_length:
             self.episodes.append(self.current_episode)
             self.current_episode = {"episode_id": len(self.episodes), "transitions": []}
-        # semantic
         for e in entities_prev:
             self.state_entities[prev].add(e)
             self.entity_states[e].add(prev)
@@ -477,13 +392,10 @@ class B7_GraphMemory(BaseMemory):
         self.note_state(prev); self.note_state(nxt); self.note_trans(tid)
 
     def write_transition(self, prev, action, nxt, step):
-        # Preserve the base interface for callers without entity metadata.
         self.write_transition_with_entities(prev, action, nxt, step, entities_prev=[], entities_next=[])
 
     def _episodic_top_k(self, current_state):
-        """Look through recent episodic transitions with prev==current_state."""
         picks = []
-        # Search the current episode first, then completed episodes newest-first.
         for ep in [self.current_episode, *reversed(self.episodes)]:
             for tr in reversed(ep["transitions"]):
                 if tr["prev"] == current_state:
@@ -492,7 +404,6 @@ class B7_GraphMemory(BaseMemory):
         return picks
 
     def _semantic_top_k(self, current_state):
-        """Find states sharing entities with current_state; among transitions from those, pick top-k."""
         my_ents = self.state_entities.get(current_state, set())
         if not my_ents:
             return []
@@ -502,7 +413,6 @@ class B7_GraphMemory(BaseMemory):
                 if s != current_state:
                     cooc_states[s] += 1
         top_states = [s for s, _ in cooc_states.most_common(self.top_k * 2)]
-        # find transitions with prev in top_states, prefer higher degree
         candidate_edges = [(tid, e) for tid, e in self.edges.items() if e["prev"] in top_states]
         candidate_edges.sort(key=lambda x: (-x[1]["degree"], x[0]))
         return [(e["prev"], e["action"], e["next"]) for tid, e in candidate_edges[:self.top_k]]
@@ -510,7 +420,6 @@ class B7_GraphMemory(BaseMemory):
     def retrieve_hints(self, current_state, step):
         epi = self._episodic_top_k(current_state)
         sem = self._semantic_top_k(current_state)
-        # Fuse + dedup, keep top-3
         seen = set()
         fused = []
         for triple in epi + sem:
@@ -531,38 +440,19 @@ class B7_GraphMemory(BaseMemory):
     def context_string(self, current_state):
         picks = getattr(self, "_last_retrieved", None) or self._episodic_top_k(current_state)[:self.top_k]
         if not picks: return "(empty KG)"
-        # Compact: episodic subgraph + top 1-hop semantic label
         parts = [f"{p}->{a}->{n}" for (p, a, n) in picks]
-        # Add semantic hint: 3 top entities of current_state
         my_ents = sorted(self.state_entities.get(current_state, set()))[:3]
         ent_str = f"ents:{','.join(my_ents)}" if my_ents else "ents:(none)"
         return "kg: " + "; ".join(parts) + " | " + ent_str
 
     def context_tokens_estimator(self):
-        return 6 * self.top_k + 6  # + semantic tag
+        return 6 * self.top_k + 6
 
     def retained_transition_ids(self):
         return set(self.edges)
 
 
-# ==============================================================================
-# B8 CTWM — five-feature core/tail memory with compact serialization
-# ==============================================================================
-
-
 class B8_CTWM(BaseMemory):
-    """
-    CTWM v1: W = W_core ∪ W_tail with τ-controlled allocation.
-    - 5 features per entry: f̃ (freq), q̃ (rank-weighted retrieval), d̃ (downstream diversity),
-      ũ (uncertainty; constant 0.5, static), ṽ (visit-inverse value proxy)
-    - Core score c_i = z-score weighted [0.3, 0.2, 0.2, 0.15, 0.15]
-    - θ_c: top-30% by c_i (percentile-based) → Core
-    - Retrieval:
-       Core: top-3 by c_i × 30 tokens = 90 tokens budget
-       Tail: top-2 by b(r;τ) = r^{-τ} / Σⱼ j^{-τ} × 12 tokens = 24 tokens budget
-    - Cluster: 相似 Tail entries (same prev state) 合并为 1 summary
-    - 无 dynamic Tail expansion by u_q (v1 limitation)
-    """
     name = "B8_CTWM"
 
     def __init__(self, tau=1.0, core_pct=0.30, core_slots=3, tail_slots=2, capacity=200,
@@ -585,9 +475,7 @@ class B8_CTWM(BaseMemory):
         self.M = capacity
         self.weights = weights
         self.rng = random.Random(seed + seed_offset)
-        # Entries: tid -> dict with f, q_ranks, d_state, u=0.5, v_state_rank, first_step
         self.entries: Dict[str, Dict[str, Any]] = {}
-        # State transition graph for d̃ (downstream diversity)
         self.state_next_states: Dict[str, set] = defaultdict(set)
         self.state_total_out: Dict[str, int] = defaultdict(int)
         self.state_visit_freq: Counter = Counter()
@@ -601,13 +489,11 @@ class B8_CTWM(BaseMemory):
                 self.entries[tid] = {"f": 1, "q_ranks": [], "prev": prev, "action": action,
                                      "next": nxt, "u": 0.5, "first_step": step}
             else:
-                # Evict lowest c_i score (recompute a batch)
                 self._recompute_scores()
                 min_tid = min(self.entries, key=lambda t: self.entries[t].get("c", 0))
                 del self.entries[min_tid]
                 self.entries[tid] = {"f": 1, "q_ranks": [], "prev": prev, "action": action,
                                      "next": nxt, "u": 0.5, "first_step": step}
-        # state graph
         self.state_next_states[prev].add(nxt)
         self.state_total_out[prev] += 1
         self.state_visit_freq[prev] += 1
@@ -617,7 +503,6 @@ class B8_CTWM(BaseMemory):
         self.note_state(prev); self.note_state(nxt); self.note_trans(tid)
 
     def _recompute_scores(self):
-        """Compute c_i = z-score weighted 5 features across all entries."""
         if not self.entries: return
         tids = list(self.entries.keys())
         f_arr = np.array([self.entries[t]["f"] for t in tids], dtype=float)
@@ -644,7 +529,6 @@ class B8_CTWM(BaseMemory):
             self.entries[t]["c"] = float(c[i])
 
     def _partition_core_tail(self):
-        """Return (core_tids sorted by c desc, tail_tids)."""
         self._recompute_scores()
         tids = list(self.entries.keys())
         if not tids: return [], []
@@ -654,17 +538,13 @@ class B8_CTWM(BaseMemory):
 
     def retrieve_hints(self, current_state, step):
         core, tail = self._partition_core_tail()
-        # Core: top core_slots by c_i (also filter to state-mate if available)
         core_mate = [t for t in core if self.entries[t]["prev"] == current_state]
-        # 若 state-mate 不够就补 non-mate 高 c_i entries
         core_pick = list(core_mate[:self.core_slots])
         if len(core_pick) < self.core_slots:
             non_mate = [t for t in core if t not in core_pick]
             core_pick.extend(non_mate[:self.core_slots - len(core_pick)])
         core_pick = core_pick[:self.core_slots]
 
-        # Tail: b(r;τ) probability sample, tail_slots picks
-        # rank r ∈ {1..len(tail)}, weight = r^{-τ}
         tail_picks = []
         if tail:
             ranks = np.arange(1, len(tail) + 1, dtype=float)
@@ -674,23 +554,19 @@ class B8_CTWM(BaseMemory):
             picked_ranks = self._sample_ranks(weights, n_pick)
             tail_picks = [tail[r] for r in picked_ranks]
 
-        # Cluster tail_picks by prev state
         clusters: Dict[str, List[str]] = defaultdict(list)
         for t in tail_picks:
             clusters[self.entries[t]["prev"]].append(t)
-        # Cluster summary: 只报 cluster head + count
         cluster_summary_tids = []
         for _prev, tids_in_cluster in clusters.items():
-            cluster_summary_tids.append(tids_in_cluster[0])  # 取 head
+            cluster_summary_tids.append(tids_in_cluster[0])
 
         events = []
-        # emit core reads
         for r, tid in enumerate(core_pick):
             self.access_counter[tid] += 1
             self.read_events += 1
             events.append({"memory_id": tid, "rank": r, "layer": "core"})
             self.entries[tid]["q_ranks"].append(r)
-        # emit tail reads
         for r, tid in enumerate(cluster_summary_tids):
             self.access_counter[tid] += 1
             self.read_events += 1
@@ -702,7 +578,6 @@ class B8_CTWM(BaseMemory):
         return events
 
     def _sample_ranks(self, weights, n_pick):
-        """Deterministic weighted sampling without replacement using self.rng."""
         remaining = list(range(len(weights)))
         remaining_w = list(weights)
         picked = []
@@ -722,17 +597,14 @@ class B8_CTWM(BaseMemory):
         return picked
 
     def context_string(self, current_state):
-        """Serialize core entries and a compact count/cluster tail summary."""
         core = getattr(self, "_last_core", []) or []
         tail = getattr(self, "_last_tail", []) or []
         core_parts = []
         for t in core:
             e = self.entries[t]
-            # rank order implicit (list order = c_i desc), no c=... verbose
             core_parts.append(f"{e['prev']}->{e['action']}->{e['next']}")
         core_str = "core:" + ";".join(core_parts) if core_parts else "core:(empty)"
 
-        # Tail entries are already reduced to one representative per cluster.
         if not tail:
             tail_str = "tail:(empty)"
         else:

@@ -1,9 +1,3 @@
-"""Compare eight memory backends under one controlled LLM-policy setup.
-
-Memory context is included in every policy prompt. Outputs contain both
-provider-reported prompt tokens and the legacy token estimator.
-"""
-
 from __future__ import annotations
 import argparse, datetime as dt, json, os, random, re, sys, time
 from collections import Counter
@@ -16,16 +10,16 @@ from scipy import stats as spstats
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
-from worldmodelsoc.env.synthetic_graph_world import (  # noqa: E402
+from worldmodelsoc.env.synthetic_graph_world import (
     build_graph,
     build_state_payloads,
     describe_action_options,
 )
-from worldmodelsoc.memory.backends import (  # noqa: E402
+from worldmodelsoc.memory.backends import (
     B1_FullHistory, B2_SlidingWindow, B3_FlatRetrieval, B4_FrequencyCache,
     B5_RecencyCache, B6_HierarchicalSummary, B7_GraphMemory, B8_CTWM,
 )
-from worldmodelsoc.llm_config import LLM_MODEL, make_openai_client  # noqa: E402
+from worldmodelsoc.llm_config import LLM_MODEL, make_openai_client
 
 
 PRICE_PROMPT_PER_1M = 0.15
@@ -43,7 +37,7 @@ class CostAccountant:
         self.tokens_prompt = 0; self.tokens_completion = 0; self.api_calls = 0
         self.fallback_count = 0; self.budget_usd = budget_usd
         self.error_count = 0; self.last_error = None
-        self.per_call_prompt_tokens: List[int] = []  # for tokens_actual analysis
+        self.per_call_prompt_tokens: List[int] = []
     def add(self, p, c):
         self.tokens_prompt += p; self.tokens_completion += c; self.api_calls += 1
         self.per_call_prompt_tokens.append(p)
@@ -79,7 +73,6 @@ def llm_pick_action(client, current_sid, actions, neighbors, recent_states,
     system_msg = ("You are a walker choosing the next action in a text world. "
                   "Reply with ONLY: {\"action_idx\": <int>} where int is 0..n_actions-1. "
                   "No explanation.")
-    # Real memory context concat here
     options = action_options or actions
     user_msg = (f"current_state: {current_sid}\n"
                 f"state_payload: {state_context or '(not provided)'}\n"
@@ -154,7 +147,7 @@ def run_method(method_name, n_nodes, n_steps, seed, budget_usd, tau, out_dir):
     per_step_tokens_est: List[int] = []
     per_step_action_correct: List[bool] = []
     per_step_state: List[str] = []
-    per_step_prompt_tokens: List[int] = []  # tokens_actual per step
+    per_step_prompt_tokens: List[int] = []
     per_step_ctx_chars: List[int] = []
     per_step_b8_core_fill: List[int] = []
     per_step_b8_tail_fill: List[int] = []
@@ -179,7 +172,6 @@ def run_method(method_name, n_nodes, n_steps, seed, budget_usd, tau, out_dir):
         if step + 1 >= n_steps:
             actual_steps = step + 1; break
 
-        # Retrieve
         hints = mem.retrieve_hints(sid, step)
         ctx_est = mem.context_tokens_estimator()
         per_step_tokens_est.append(ctx_est)
@@ -188,7 +180,6 @@ def run_method(method_name, n_nodes, n_steps, seed, budget_usd, tau, out_dir):
         if method_name == "B8_CTWM":
             per_step_b8_core_fill.append(len(getattr(mem, "_last_core", []) or []))
             per_step_b8_tail_fill.append(len(getattr(mem, "_last_tail", []) or []))
-            # clusters = unique prev states in _last_tail
             tail_prevs = set()
             for t in (getattr(mem, "_last_tail", []) or []):
                 if t in mem.entries:
@@ -204,7 +195,6 @@ def run_method(method_name, n_nodes, n_steps, seed, budget_usd, tau, out_dir):
                 "layer": h.get("layer"),
             })
 
-        # LLM pick
         actions = action_cache[current]
         neighbors = neighbors_cache[current]
         n_prompt_before = accountant.tokens_prompt
@@ -234,7 +224,6 @@ def run_method(method_name, n_nodes, n_steps, seed, budget_usd, tau, out_dir):
         tid = f"{sid}::{action}::{nxt_sid}"
         walker_trans.add(tid)
 
-        # Write
         if uses_entities:
             mem.write_transition_with_entities(
                 sid, action, nxt_sid, step,
@@ -250,7 +239,6 @@ def run_method(method_name, n_nodes, n_steps, seed, budget_usd, tau, out_dir):
             "memory_id": tid, "access_kind": "write",
         })
 
-        # Prediction check: top-1 hint next matches actual?
         pred_correct = False
         if hints:
             top1_mid = str(hints[0].get("memory_id", ""))
@@ -282,13 +270,11 @@ def run_method(method_name, n_nodes, n_steps, seed, budget_usd, tau, out_dir):
                 print(f"  [BUDGET] ${used:.3f}>=${budget_usd:.2f} stop step {step+1}", flush=True)
                 break
 
-    # Metrics
     avg_tokens_est = float(np.mean(per_step_tokens_est)) if per_step_tokens_est else 0.0
     avg_tokens_actual = float(np.mean(per_step_prompt_tokens)) if per_step_prompt_tokens else 0.0
     coverage_state = mem.coverage_state(walker_states)
     coverage_trans = mem.coverage_trans(walker_trans)
 
-    # Tail err: bottom-50% state visit → prediction accuracy
     state_visits = Counter(per_step_state)
     sorted_by_v = sorted(state_visits.items(), key=lambda x: x[1])
     n_tail = max(1, int(len(sorted_by_v) * 0.5))
@@ -315,7 +301,6 @@ def run_method(method_name, n_nodes, n_steps, seed, budget_usd, tau, out_dir):
         else 0.0
     )
 
-    # Bucket analysis (5 buckets of ~400 steps) for tokens_actual + ctx_chars
     n_avail = len(per_step_prompt_tokens)
     n_buckets = 5
     buckets = []
@@ -422,17 +407,15 @@ def main():
     all_results = []
     total_cost = 0.0
 
-    # Per-method caps reflect the different context lengths. The defaults sum
-    # to $2.95 under the configured pricing estimate.
     method_budgets = {
-        "B1_FullHistory": 0.35,      # N=500 with linear growth: ~$0.27 empirical
-        "B2_SlidingWindow": 0.65,    # N=2000 with K=100 window ~1500 tokens/step: ~$0.55
+        "B1_FullHistory": 0.35,
+        "B2_SlidingWindow": 0.65,
         "B3_FlatRetrieval": 0.20,
         "B4_FrequencyCache": 0.20,
         "B5_RecencyCache": 0.20,
-        "B6_HierarchicalSummary": 0.65,   # similar to B2, grows with summaries
-        "B7_GraphMemory": 0.35,      # KG may grow, allow more
-        "B8_CTWM": 0.35,             # 5 features + Core/Tail slots, allow more
+        "B6_HierarchicalSummary": 0.65,
+        "B7_GraphMemory": 0.35,
+        "B8_CTWM": 0.35,
     }
     for m in args.methods:
         n_steps = args.n_steps_b1 if m == "B1_FullHistory" else args.n_steps
@@ -455,7 +438,6 @@ def main():
             import traceback; traceback.print_exc()
             all_results.append({"method": m, "error": str(e)})
 
-    # Verdicts
     by_m = {r["method"]: r for r in all_results if "metrics" in r}
     def get(n, k): return by_m.get(n, {}).get("metrics", {}).get(k)
 

@@ -1,10 +1,3 @@
-"""Replay frozen trajectories under one retrieval implementation.
-
-The replay measures trajectory-specific differences without making API calls.
-Optional live metrics may be supplied explicitly for comparison; no empirical
-values are embedded in the script.
-"""
-
 from __future__ import annotations
 import argparse, json, os, sys
 from collections import Counter
@@ -13,7 +6,7 @@ from typing import Any, Dict, List
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
-from worldmodelsoc.memory.backends_ctwm import B8_CTWM  # noqa: E402
+from worldmodelsoc.memory.backends_ctwm import B8_CTWM
 
 
 def load_actions(path: str) -> List[Dict[str, Any]]:
@@ -39,14 +32,6 @@ def replay_on_trajectory(
     tau: float = 1.0,
     seed: int = 42,
 ) -> Dict[str, Any]:
-    """
-    Given a frozen list of (prev, action, next) records, replay B8_CTWM memory:
-    - Write each transition
-    - After each write, retrieve top-1 hint for the current step
-    - Compare top-1 hint's next-state against actual next-state -> tail metric
-
-    Returns tail_err (bottom-50% state), plus stats.
-    """
     mem = B8_CTWM(
         tau=tau,
         core_pct=0.30,
@@ -63,12 +48,9 @@ def replay_on_trajectory(
         nxt = r["next"]
         step = r.get("agent_step", i)
 
-        # Retrieve first (before write, matches live run order)
         hints = mem.retrieve_hints(prev, step)
-        # Write the transition
         mem.write_transition(prev, action, nxt, step)
 
-        # Prediction: top-1 hint memory_id matches actual next?
         pred_correct = False
         if hints:
             top1_mid = str(hints[0].get("memory_id", ""))
@@ -79,7 +61,6 @@ def replay_on_trajectory(
         per_step_correct.append(pred_correct)
         per_step_state.append(prev)
 
-    # Tail = bottom-50% states by visit count
     state_visits = Counter(per_step_state)
     sorted_by_v = sorted(state_visits.items(), key=lambda x: x[1])
     n_tail = max(1, int(len(sorted_by_v) * 0.5))

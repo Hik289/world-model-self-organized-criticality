@@ -1,26 +1,3 @@
-"""
-Random-walk scaling study — 6 graph families × 3 sizes × 3 seeds.
-
-设计:
-- 6 图 = 5 主图 (uniform_degree / exponential_degree / scale_free / modular / mixed)
-        + baseline (uniform k-regular + fully symmetric payload)
-- 3 |V| ∈ {100, 500, 1000}
-- 3 seeds ∈ {42, 43, 44}
-- N=100,000
-- policy: random-walk
-- memory: v2 StateAwareReservoirMemory (sort-by-freq + top_k=3), M=200
-- 输出:
-  - results/<graph_type>_v<n_nodes>_s<seed>_meta.json (每 run stats)
-  - results/<graph_type>_v<n_nodes>_s<seed>_mem_freqs.json (完整 memory-access 频次分布, per memory_id counts)
-  - results/<graph_type>_v<n_nodes>_s<seed>_mem_time.jsonl (memory-access 时序: per event 的 (wallclock_ms, agent_step, memory_id) 三元组, 为 PSD 铺路)
-  - results/<graph_type>_v<n_nodes>_s<seed>_state_freqs.json
-  - results/<graph_type>_v<n_nodes>_s<seed>_trans_freqs.json
-  - summary.json: 54 runs 的 raw stats table
-
-不写完整 events.jsonl (太大, 100k × 5 events = 500k 事件/run, 54 runs 会几十 GB).
-仅写下游 SOC 分析需要的三样: (a) 频次 counts, (b) memory 访问时序 (agent_step + memory_id), (c) summary stats.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -40,18 +17,13 @@ from scipy import stats as spstats
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
-from worldmodelsoc.memory.reservoir import StateAwareReservoirMemory  # noqa: E402
-from worldmodelsoc.env.synthetic_graph_world import (  # noqa: E402
+from worldmodelsoc.memory.reservoir import StateAwareReservoirMemory
+from worldmodelsoc.env.synthetic_graph_world import (
     action_index_for_neighbor,
     build_graph,
     build_state_payloads,
     GRAPH_TYPES as MAIN_GRAPH_TYPES,
 )
-
-
-# ==============================================================================
-# baseline 图 + 对称 payload (复用 baseline_hub_effect 逻辑)
-# ==============================================================================
 
 
 @dataclass
@@ -100,11 +72,6 @@ def build_graph_and_payloads(graph_type: str, n_nodes: int, seed: int):
     return g, payloads
 
 
-# ==============================================================================
-# 统计工具
-# ==============================================================================
-
-
 def gini(x: np.ndarray) -> float:
     if x.size == 0: return 0.0
     x = np.sort(np.asarray(x, dtype=np.float64))
@@ -139,20 +106,9 @@ def summary_stats(freqs: List[int]) -> Dict[str, float]:
             "std": float(arr.std()), "total": total}
 
 
-# ==============================================================================
-# 单 run
-# ==============================================================================
-
-
 def run_one(graph_type: str, n_nodes: int, seed: int, n_steps: int,
             reservoir_capacity: int, top_k_retrieve: int,
             results_dir: str, write_mem_timeseries: bool) -> Dict[str, Any]:
-    """
-    单 run: 生成图, 跑 random-walk, 写下游需要的产物 (per-id counts + mem timeseries + summary).
-
-    write_mem_timeseries: 若 True 写 memory-access 时序 (agent_step, memory_id, access_kind, retrieval_rank).
-                          若 False 只写频次 counts (节省 IO).
-    """
     t0 = time.time()
     g, payloads = build_graph_and_payloads(graph_type, n_nodes, seed=seed)
 
@@ -167,16 +123,13 @@ def run_one(graph_type: str, n_nodes: int, seed: int, n_steps: int,
     state_counter: Counter = Counter()
     trans_counter: Counter = Counter()
 
-    # 每半段计数, 用于时间稳定性
     half = n_steps // 2
     state_first: Counter = Counter()
     state_second: Counter = Counter()
     mem_first: Counter = Counter()
     mem_second: Counter = Counter()
 
-    # memory 访问时序 (仅 access_kind=read, 用于 PSD)
-    # 我们记 (agent_step, memory_id_index) 二元组; memory_id_index = 一个全局递增 id, 用于 PSD 输入
-    mem_time_records: List[Tuple[int, str, str, int]] = []  # (step, mid, kind, rank_or_-1)
+    mem_time_records: List[Tuple[int, str, str, int]] = []
 
     current = rng_walk.choice(list(g.nodes()))
     for step in range(n_steps):
@@ -225,11 +178,9 @@ def run_one(graph_type: str, n_nodes: int, seed: int, n_steps: int,
     trans_freqs = list(trans_counter.values())
     mem_freqs = list(mem.access_counter.values())
 
-    # ============ 落盘 ============
     os.makedirs(results_dir, exist_ok=True)
     tag = f"{graph_type}_v{n_nodes}_s{seed}"
 
-    # per-id count files (下游 SOC 分析)
     with open(os.path.join(results_dir, f"{tag}_state_counts.json"), "w") as f:
         json.dump(dict(state_counter), f)
     with open(os.path.join(results_dir, f"{tag}_trans_counts.json"), "w") as f:
@@ -237,7 +188,6 @@ def run_one(graph_type: str, n_nodes: int, seed: int, n_steps: int,
     with open(os.path.join(results_dir, f"{tag}_mem_counts.json"), "w") as f:
         json.dump(dict(mem.access_counter), f)
 
-    # temporal half counts (时间稳定性用)
     with open(os.path.join(results_dir, f"{tag}_state_first_half.json"), "w") as f:
         json.dump(dict(state_first), f)
     with open(os.path.join(results_dir, f"{tag}_state_second_half.json"), "w") as f:
@@ -247,13 +197,11 @@ def run_one(graph_type: str, n_nodes: int, seed: int, n_steps: int,
     with open(os.path.join(results_dir, f"{tag}_mem_second_half.json"), "w") as f:
         json.dump(dict(mem_second), f)
 
-    # memory 时序 (可选, 只在 gt=scale_free 上启用, 全跑太大)
     if write_mem_timeseries:
         with open(os.path.join(results_dir, f"{tag}_mem_time.jsonl"), "w") as f:
             for (st, mid, kind, rank) in mem_time_records:
                 f.write(json.dumps({"step": st, "mid": mid, "kind": kind, "rank": rank}) + "\n")
 
-    # summary stats
     st = summary_stats(state_freqs)
     tr = summary_stats(trans_freqs)
     me = summary_stats(mem_freqs)
@@ -297,11 +245,6 @@ def run_one(graph_type: str, n_nodes: int, seed: int, n_steps: int,
     return meta
 
 
-# ==============================================================================
-# 全局主入口
-# ==============================================================================
-
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--n_steps", type=int, default=100_000)
@@ -342,7 +285,6 @@ def main():
             print(f"    ERROR: {e}", flush=True)
             all_meta.append({"error": str(e), "graph_type": gt, "n_nodes": nn, "seed": s})
 
-    # summary
     summary = {
         "study": "random_walk_scaling",
         "config": {
