@@ -39,22 +39,10 @@ The repository studies whether LLM-agent world models exhibit self-organized cri
 **Figure 1.** Workflow from memory-trace collection and tail auditing to CTWM allocation. Random-walk and semantic policies produce traces for distributional comparison; the observed concentration motivates rank-based allocation into a compact core and summarized tail.
 
 <p align="center">
-  <img src="assets/figures/pipeline_llm_policy.png" alt="LLM policy pipeline" width="72%">
-</p>
-
-**Figure 2.** LLM-policy pipeline: state payloads, retrieved memory hints, and recent trajectory context are passed to the policy model, which chooses the next graph action.
-
-<p align="center">
-  <img src="assets/figures/pipeline_retriever_ladder.png" alt="Retriever ladder" width="72%">
-</p>
-
-**Figure 3.** Retriever ladder used for controlled memory comparisons, from simple history/window baselines to graph-structured retrieval.
-
-<p align="center">
   <img src="assets/figures/pipeline_ctwm.png" alt="CTWM memory controller and agent interaction workflow" width="100%">
 </p>
 
-**Figure 4.** CTWM workflow: state-aware retrieval, core–tail allocation, and prompt serialization feed a frozen LLM. Environment observations update structured memory, while a separate next-state prediction readout records prediction error alongside retrieval counts and API prompt tokens.
+**Figure 2.** CTWM workflow: state-aware retrieval, core–tail allocation, and prompt serialization feed a frozen LLM. Environment observations update structured memory, while a separate next-state prediction readout records prediction error alongside retrieval counts and API prompt tokens.
 
 ## Repository Structure
 

@@ -47,8 +47,6 @@ Main tracked entry points for paper-scale or benchmark-scale runs:
 
 - `assets/figures/intuition_lognormal_to_tpl.png`
 - `assets/figures/pipeline_ctwm.png`
-- `assets/figures/pipeline_llm_policy.png`
-- `assets/figures/pipeline_retriever_ladder.png`
 
 ## Data And Outputs
 
