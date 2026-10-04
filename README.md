@@ -44,7 +44,7 @@ This repository studies heavy-tailed memory usage in long-horizon language agent
   <img src="assets/figures/figure2_ctmc_memory_audit.png" alt="Memory audit and CTMC allocation pipeline" width="100%">
 </p>
 
-**Figure 2. Memory audit and CTMC allocation pipeline.** Memory-access traces from random-walk and semantic LLM policies are audited for tail-family compatibility. The observed concentration motivates CTMC: retrieve and rank candidates, allocate the prompt budget according to `b(r; tau) ∝ r^(-tau)`, and combine a compact core with summarized lower-priority evidence.
+**Figure 2. Memory audit and CTMC allocation pipeline.** Memory-access traces from random-walk and semantic LLM policies are audited for tail-family compatibility. The observed concentration motivates CTMC: retrieve and rank candidates, allocate the prompt budget according to `ω_t(r; τ) ∝ r^(−τ)`, and combine a compact core with summarized lower-priority evidence.
 
 [Download Figure 2](assets/figures/figure2_ctmc_memory_audit.png)
 
