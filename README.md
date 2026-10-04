@@ -10,39 +10,43 @@ Official code for **Heavy-Tailed Memory Traces in Long-Horizon Language Agents**
 
 **Xinyuan Song · Zekun Cai**
 
-The repository studies whether LLM-agent world models exhibit self-organized criticality (SOC) signatures in memory access. Random-walk policies produce heavy-tailed log-normal access patterns, while semantically driven LLM policies shift the memory distribution toward a truncated power law. We also include Core-Tail World Model (CTWM), a memory allocation mechanism that uses an external tail coefficient `tau` to trade off core reuse and tail coverage.
+This repository studies heavy-tailed memory usage in long-horizon language agents. Repeated retrieval produces policy-dependent concentration: random-walk traces are primarily log-normal-compatible, while semantic LLM policies produce the strongest truncated-power-law-compatible traces. Core–Tail Memory Controller (CTMC) uses a single rank exponent `tau` to allocate a finite prompt budget between individual core records and a summarized tail, without retraining the base model.
 
 ## At A Glance
 
 | Artifact review question | Entry point |
 | --- | --- |
-| Research question | Do world-model memory systems exhibit heavy-tailed access and failure dynamics? |
-| Core method | The project studies random-walk, LLM-policy, retriever, and Core-Tail World Model regimes under controlled comparisons. |
+| Research question | How is memory usage concentrated across stored information, and can that concentration guide finite-budget allocation? |
+| Core method | The project studies random-walk, LLM-policy, retriever, and Core–Tail Memory Controller regimes under controlled comparisons. |
 | Included artifacts | Figures, retrieval ladders, reproduction scripts, expected artifacts, and key reported results. |
 | Fast validation | `python scripts/run_random_walk_scaling.py --out_dir results/quick --graph_types scale_free --n_nodes 100 --seeds 42 --n_steps 1000` |
-| Paper-scale reproduction | Random-walk, LLM-policy, CTWM, tau sweep, topology control, seed CI, replay, and ALFWorld scripts. |
+| Paper-scale reproduction | Random-walk, LLM-policy, CTMC, tau sweep, topology control, seed CI, replay, and ALFWorld scripts. |
 
 ## Key Contributions
 
 - Synthetic graph-world generator for controlled topology, scale, and payload semantics.
 - LLM-policy walker experiments with an OpenAI-compatible chat-completions API.
-- Memory baselines including full history, sliding window, flat retrieval, frequency cache, recency cache, hierarchical summary, graph memory, and CTWM.
+- Memory baselines including full history, sliding window, flat retrieval, frequency cache, recency cache, hierarchical summary, graph memory, and CTMC.
 - Distribution-analysis artifacts for log-normal, power-law, truncated power-law, and temporal PSD checks.
 - ALFWorld external-validity script for task-level token and tail-retrieval behavior.
 
 ## Paper Figures
 
 <p align="center">
-  <img src="assets/figures/intuition_lognormal_to_tpl.png" alt="Memory-trace audit and CTWM allocation workflow" width="100%">
+  <img src="assets/figures/figure1_ctmc_agent_loop.png" alt="Core–Tail Memory Controller agent loop" width="100%">
 </p>
 
-**Figure 1.** Workflow from memory-trace collection and tail auditing to CTWM allocation. Random-walk and semantic policies produce traces for distributional comparison; the observed concentration motivates rank-based allocation into a compact core and summarized tail.
+**Figure 1. CTMC agent loop.** Retrieve and rank candidates from structured memory, allocate context between individual core records and a summarized tail, and serialize the context for a frozen LLM. Next-state predictions are evaluated before the new transition is written back to memory. The loop records state-prediction error, retrieval counts, and API prompt tokens.
+
+[Download Figure 1](assets/figures/figure1_ctmc_agent_loop.png)
 
 <p align="center">
-  <img src="assets/figures/pipeline_ctwm.png" alt="CTWM memory controller and agent interaction workflow" width="100%">
+  <img src="assets/figures/figure2_ctmc_memory_audit.png" alt="Memory audit and CTMC allocation pipeline" width="100%">
 </p>
 
-**Figure 2.** CTWM workflow: state-aware retrieval, core–tail allocation, and prompt serialization feed a frozen LLM. Environment observations update structured memory, while a separate next-state prediction readout records prediction error alongside retrieval counts and API prompt tokens.
+**Figure 2. Memory audit and CTMC allocation pipeline.** Memory-access traces from random-walk and semantic LLM policies are audited for tail-family compatibility. The observed concentration motivates CTMC: retrieve and rank candidates, allocate the prompt budget according to `b(r; tau) ∝ r^(-tau)`, and combine a compact core with summarized lower-priority evidence.
+
+[Download Figure 2](assets/figures/figure2_ctmc_memory_audit.png)
 
 ## Repository Structure
 
@@ -134,7 +138,7 @@ python scripts/run_llm_policy.py \
   --out_dir results/llm_policy
 ```
 
-Compare memory methods:
+Compare memory methods (the existing `B8_CTWM` identifier invokes the method now named CTMC in the paper):
 
 ```bash
 python scripts/run_ctwm_comparison.py \
@@ -164,10 +168,10 @@ python scripts/run_tau_sweep.py \
 | `scripts/run_random_walk_scaling.py` | Random-walk graph scaling across topologies, sizes, and seeds. |
 | `scripts/run_llm_policy.py` | Replace random walk with LLM semantic policy on the same graph-world setup. |
 | `scripts/run_method_comparison.py` | Compare standard memory baselines under true prompt concatenation. |
-| `scripts/run_ctwm_comparison.py` | Compare compact CTWM against graph-memory and cache baselines. |
+| `scripts/run_ctwm_comparison.py` | Compare compact CTMC against graph-memory and cache baselines. |
 | `scripts/run_tau_sweep.py` | Study how `tau` changes memory concentration and tail retrieval. |
 | `scripts/run_topology_control.py` | Run LLM-policy controls on non-scale-free graph families. |
-| `scripts/run_seed_ci.py` | Compute seed confidence intervals for graph memory and CTWM. |
+| `scripts/run_seed_ci.py` | Compute seed confidence intervals for graph memory and CTMC. |
 | `scripts/run_frozen_replay.py` | Replay frozen trajectories to separate encoding effects from path variance. |
 | `scripts/run_sanity.py` | Run the API-backed five-state end-to-end pipeline check. |
 | `scripts/run_alfworld.py` | External-validity run on ALFWorld tasks. |
@@ -189,9 +193,9 @@ Each run writes JSON/JSONL artifacts under the requested `--out_dir`, typically:
 |---|---|
 | Random-walk access | Log-normal better explains random-walk memory access across controlled graph scales. |
 | LLM-policy access | Semantically driven action choice yields truncated-power-law-compatible memory access. |
-| CTWM efficiency | CTWM reduces prompt tokens while improving tail retrieval relative to graph memory. |
-| Tau control | Increasing `tau` monotonically changes concentration statistics such as Gini and max/median. |
-| External validity | ALFWorld runs preserve the same token/tail-access trend beyond synthetic graphs. |
+| CTMC efficiency | CTMC reduces prompt tokens and tail-state prediction error while preserving synthetic state and transition coverage. |
+| Tau control | Increasing `tau` concentrates the rank-based allocation toward the core; lower-priority evidence remains represented by a tail summary. |
+| Cross-benchmark efficiency | The paper reports prompt-token savings on ALFWorld and a 24.48% reduction on LongMemEval with aggregate accuracy parity. |
 
 ## Artifact Notes
 

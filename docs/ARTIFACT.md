@@ -45,8 +45,8 @@ Main tracked entry points for paper-scale or benchmark-scale runs:
 
 ## Figure Assets
 
-- `assets/figures/intuition_lognormal_to_tpl.png`
-- `assets/figures/pipeline_ctwm.png`
+- `assets/figures/figure1_ctmc_agent_loop.png`: CTMC agent loop (Figure 1).
+- `assets/figures/figure2_ctmc_memory_audit.png`: memory audit and CTMC allocation (Figure 2).
 
 ## Data And Outputs
 
