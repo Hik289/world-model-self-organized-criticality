@@ -20,10 +20,12 @@ dependencies = [
   "powerlaw>=1.4",
   "scipy>=1.11",
   "tqdm>=4.65",
+  "tiktoken>=0.7",
 ]
 
 [project.optional-dependencies]
 alfworld = ["alfworld>=0.3"]
+longmemeval = ["backoff>=2.2"]
 dev = ["pytest>=7.0", "ruff>=0.5"]
 
 [tool.setuptools.packages.find]
