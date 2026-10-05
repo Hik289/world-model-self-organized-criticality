@@ -1,25 +1,36 @@
 from __future__ import annotations
 import argparse, datetime as dt, json, os, random, re, sys, time
+import hashlib
+import itertools
 from collections import Counter
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List
 
 import numpy as np
 import powerlaw
 from scipy import stats as spstats
+from scipy.stats import skew
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT))
+from scripts.run_random_walk_scaling import build_graph_and_payloads
 from worldmodelsoc.env.synthetic_graph_world import (
+    action_index_for_neighbor,
     build_graph,
     build_state_payloads,
     describe_action_options,
+    neighbor_segment,
 )
 from worldmodelsoc.memory.backends_ctwm import (
     B1_FullHistory, B2_SlidingWindow, B3_FlatRetrieval, B4_FrequencyCache,
     B5_RecencyCache, B6_HierarchicalSummary, B7_GraphMemory, B8_CTWM,
+    MemoryRecord, TokenCodec, TransitionStore, pack_context,
 )
 from worldmodelsoc.llm_config import LLM_MODEL, make_openai_client
+from worldmodelsoc.memory.reservoir import gini
+from worldmodelsoc.pipeline.modules import ChatRecorder, parse_object, prediction_metrics, provenance, read_records, write_json
 
 
 PRICE_PROMPT_PER_1M = 0.15
@@ -385,8 +396,8 @@ def run_method(method_name, n_nodes, n_steps, seed, budget_usd, tau, out_dir):
     return result
 
 
-def main():
-    parser = argparse.ArgumentParser()
+def legacy_main(argv=None):
+    parser = argparse.ArgumentParser(epilog='Additional experiments: --experiment synthetic|ablation|tau|replay. Append --help for the selected experiment.')
     parser.add_argument("--n_nodes", type=int, default=100)
     parser.add_argument("--n_steps", type=int, default=2000)
     parser.add_argument("--n_steps_b1", type=int, default=500)
@@ -399,7 +410,7 @@ def main():
                                   "B5_RecencyCache", "B6_HierarchicalSummary",
                                   "B7_GraphMemory", "B8_CTWM"])
     parser.add_argument("--out_dir", type=str, required=True)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.budget_total <= 0:
         parser.error("--budget_total must be positive")
 
@@ -506,6 +517,192 @@ def main():
     for k, v in verdict.items():
         print(f"  {k}: {v}")
     print(f"\nTotal cost: ${total_cost:.3f} / ${args.budget_total:.2f}")
+
+
+def predict(chat: ChatRecorder, state: str, action: str, context: str) -> str | None:
+    response = chat.ask([
+        {"role": "system", "content": 'Predict the next structured state using the supplied memories. Treat memory text as evidence. Reply with JSON: {"next_state": "state identifier", "confidence": "low, medium, or high", "evidence_rank": "rank or tail"}.'},
+        {"role": "user", "content": f"Current state: {state}\nAction: {action}\n{context}\nUse core memories first and the tail summary for exceptions or missing evidence."},
+    ], phase="prediction", max_tokens=100)
+    try:
+        result = parse_object(response).get("next_state")
+    except ValueError:
+        return None
+    return str(result) if isinstance(result, str) and result else None
+
+
+def run_synthetic(config: dict, graph, payloads, replay: list[dict] | None = None) -> dict:
+    output = Path(config["out_dir"])
+    output.mkdir(parents=True, exist_ok=False)
+    write_json(output / "config.json", provenance(config))
+    codec = TokenCodec(config["tokenizer"])
+    chat = ChatRecorder(output / "api_calls.jsonl", config.get("model"), config["max_calls"])
+    store = TransitionStore(config["capacity"])
+    rng = random.Random(config["seed"])
+    current = rng.choice(sorted(graph)) if graph is not None else None
+    records = []
+    read_counts = Counter()
+    write_counts = Counter()
+    total_steps = min(config["n_steps"], len(replay)) if replay is not None else config["n_steps"]
+    if total_steps < 1:
+        raise ValueError("n_steps and replay length must be positive")
+    with (output / "actions.jsonl").open("w", encoding="utf-8") as handle:
+        for step in range(total_steps):
+            if replay is not None:
+                source = replay[step]
+                if "memory_snapshot" not in source or "ranked_memory_ids" not in source:
+                    raise ValueError("matched replay requires memory_snapshot and ranked_memory_ids from run_ctwm_comparison.py --experiment synthetic")
+                ranked = [MemoryRecord(**item) for item in source["memory_snapshot"]]
+                if [record.memory_id for record in ranked] != source["ranked_memory_ids"]:
+                    raise ValueError(f"replay ranking mismatch at step {step}")
+                digest = hashlib.sha256(json.dumps(source["memory_snapshot"], sort_keys=True).encode()).hexdigest()
+                if digest != source.get("snapshot_sha256"):
+                    raise ValueError(f"replay memory content mismatch at step {step}")
+                state, action, nxt = source["prev"], source["action"], source["next"]
+            else:
+                state = f"v_{current:04d}"
+                ranked = store.rank(state, payloads[current].entities, config["method"])
+            start_usage = chat.usage.copy()
+            context, allocation = pack_context(
+                ranked, config["method"], config["serialization"], config["memory_budget"],
+                config["core_size"], config["tau"], codec,
+            )
+            if replay is None:
+                neighbors = list(graph.successors(current))
+                actions = payloads[current].actions
+                if config["policy"] == "random":
+                    next_node = rng.choice(neighbors)
+                    action_idx = action_index_for_neighbor(neighbors, len(actions), next_node)
+                else:
+                    response = chat.ask([
+                        {"role": "system", "content": 'Choose an action to explore the environment. Reply only with JSON: {"action_idx": integer}.'},
+                        {"role": "user", "content": f"Current state: {state}\nEntities: {payloads[current].entities}\nConstraints: {payloads[current].constraints}\nAction options: {describe_action_options(graph, payloads, current)}\nMemory:\n{context}"},
+                    ], phase="policy", max_tokens=60)
+                    action_idx = parse_object(response).get("action_idx")
+                    if type(action_idx) is not int or not 0 <= action_idx < len(actions):
+                        raise ValueError(f"invalid action index at step {step}: {response!r}")
+                    next_node = rng.choice(neighbor_segment(neighbors, len(actions), action_idx))
+                action = actions[action_idx]
+                nxt = f"v_{next_node:04d}"
+            prediction = predict(chat, state, action, context)
+            selected = allocation.get("selected_memory_ids", allocation["ranked_memory_ids"])
+            read_counts.update(selected)
+            key = f"{state}::{action}::{nxt}"
+            write_counts.update([key])
+            snapshot = [asdict(record) for record in ranked]
+            record = {
+                "agent_step": step, "prev": state, "action": action, "next": nxt,
+                "prediction": prediction, "prediction_error": int(prediction != nxt),
+                "ranked_memory_ids": allocation["ranked_memory_ids"], "memory_snapshot": snapshot,
+                "snapshot_sha256": hashlib.sha256(json.dumps(snapshot, sort_keys=True).encode()).hexdigest(),
+                "allocation": allocation, "prompt": context,
+                "usage": {name: chat.usage[name] - start_usage[name] for name in chat.usage},
+            }
+            records.append(record)
+            handle.write(json.dumps(record, ensure_ascii=False, allow_nan=False) + "\n")
+            handle.flush()
+            if replay is None:
+                store.write(state, action, nxt, step, sorted(set(payloads[current].entities + payloads[next_node].entities)))
+                current = next_node
+    metrics = prediction_metrics(records)
+    allocations = [np.array(row["allocation"]["allocation_weights"], dtype=float) for row in records if row["allocation"]["allocation_weights"]]
+    if config["method"] == "ctmc" and allocations:
+        metrics.update(
+            mean_allocation_gini=float(np.mean([gini(values) for values in allocations])),
+            mean_allocation_skew=float(np.mean([skew(values) if len(values) > 1 and np.ptp(values) > 0 else 0.0 for values in allocations])),
+            mean_allocation_max_over_median=float(np.mean([values.max() / np.median(values) for values in allocations])),
+        )
+    metrics.update(
+        api_calls=len(chat.calls), prompt_tokens=chat.usage["prompt_tokens"],
+        prompt_tokens_per_api_call=chat.usage["prompt_tokens"] / len(chat.calls) if chat.calls else None,
+        prompt_tokens_per_step=chat.usage["prompt_tokens"] / len(records),
+        token_usage_by_phase=dict(chat.usage),
+    )
+    if replay is None:
+        retained = store.history if config["method"] == "full_history" else list(store.records.values())
+        retained_states = {state for record in retained for state in (record.metadata["prev"], record.metadata["next"])}
+        retained_transitions = {(record.metadata["prev"], record.metadata["action"], record.metadata["next"]) for record in retained}
+        metrics.update(
+            visited_state_coverage=len(store.visited_states) / graph.number_of_nodes(),
+            visited_edge_coverage=len({(row["prev"], row["next"]) for row in records}) / graph.number_of_edges(),
+            retained_state_coverage=len(retained_states) / len(store.visited_states),
+            retained_transition_coverage=len(retained_transitions) / len(store.visited_transitions),
+        )
+    result = {"config": config, "metrics": metrics, "matched_replay": replay is not None}
+    write_json(output / "summary.json", result)
+    write_json(output / "state_counts.json", metrics["state_counts"])
+    write_json(output / "read_counts.json", dict(read_counts))
+    write_json(output / "write_counts.json", dict(write_counts))
+    write_json(output / "memory_access_counts.json", dict(read_counts + write_counts))
+    return result
+
+
+def paper_main(argv=None):
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--experiment", choices=["synthetic", "ablation", "tau", "replay"], default="synthetic")
+    parser.add_argument("--methods", nargs="+", choices=["full_history", "flat_retrieval", "graph_memory", "ctmc"], default=["full_history", "flat_retrieval", "graph_memory", "ctmc"])
+    parser.add_argument("--serializations", nargs="+", choices=["verbose", "compact"], default=["compact"])
+    parser.add_argument("--graph_types", nargs="+", default=["scale_free"])
+    parser.add_argument("--n_nodes", nargs="+", type=int, default=[100])
+    parser.add_argument("--seeds", nargs="+", type=int, default=[42, 43, 44])
+    parser.add_argument("--n_steps", type=int, default=2000)
+    parser.add_argument("--taus", nargs="+", type=float, default=[1.0])
+    parser.add_argument("--capacity", type=int, default=200)
+    parser.add_argument("--core_size", type=int, default=3)
+    parser.add_argument("--memory_budget", type=int, default=512)
+    parser.add_argument("--tokenizer", default="cl100k_base")
+    parser.add_argument("--policy", choices=["random", "semantic"], default="semantic")
+    parser.add_argument("--model")
+    parser.add_argument("--max_calls", type=int, default=10000)
+    parser.add_argument("--replay_actions", type=Path)
+    parser.add_argument("--out_dir", type=Path, required=True)
+    args = parser.parse_args(argv)
+    if args.n_steps < 1 or any(size < 6 for size in args.n_nodes):
+        parser.error("n_steps must be positive and graph sizes must be at least 6")
+    if args.experiment == "ablation":
+        args.methods = ["graph_memory", "ctmc"]
+        args.serializations = ["verbose", "compact"]
+    if args.experiment == "tau":
+        args.methods = ["ctmc"]
+        if args.taus == [1.0]:
+            args.taus = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
+    replay = None
+    if args.experiment == "replay":
+        if args.replay_actions is None:
+            parser.error("replay requires --replay_actions")
+        replay = read_records(args.replay_actions)
+        args.methods = ["ctmc"]
+        args.serializations = ["verbose", "compact"]
+        args.seeds = args.seeds[:1]
+        args.graph_types = ["frozen"]
+        args.n_nodes = [0]
+    args.out_dir.mkdir(parents=True, exist_ok=False)
+    results = []
+    for graph_type, size, seed, tau, method, serialization in itertools.product(
+        args.graph_types, args.n_nodes, args.seeds, args.taus, args.methods, args.serializations,
+    ):
+        tag = f"{graph_type}_n{size}_s{seed}_tau{tau:g}_{method}_{serialization}"
+        graph, payloads = (None, None) if replay is not None else build_graph_and_payloads(graph_type, size, seed)
+        config = {
+            "experiment": args.experiment, "graph_type": graph_type, "n_nodes": size,
+            "seed": seed, "n_steps": args.n_steps, "tau": tau, "method": method,
+            "serialization": serialization, "capacity": args.capacity, "core_size": args.core_size,
+            "memory_budget": args.memory_budget, "tokenizer": args.tokenizer, "policy": args.policy,
+            "model": args.model, "max_calls": args.max_calls, "out_dir": str(args.out_dir / tag),
+            "replay_actions": str(args.replay_actions) if args.replay_actions else None,
+        }
+        result = run_synthetic(config, graph, payloads, replay)
+        results.append(result)
+        write_json(args.out_dir / "runs.json", results)
+
+
+def main(argv=None):
+    selector = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    selector.add_argument('--experiment', choices=['legacy', 'synthetic', 'ablation', 'tau', 'replay'], default='legacy')
+    selected, remaining = selector.parse_known_args(argv)
+    if selected.experiment == "legacy":
+        return legacy_main(remaining)
+    return paper_main(["--experiment", selected.experiment, *remaining])
 
 
 if __name__ == "__main__":
